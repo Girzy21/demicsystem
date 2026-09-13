@@ -1095,21 +1095,24 @@ function ModuleUploadComposer({
     setModuleDraftTopic(""); // topic list changes with subject — clear the stale pick
   }
 
-  const hasSource = moduleDraftKind === "link" ? moduleDraftLinkUrl.trim() : !!moduleDraftFile;
-  const canSubmit = moduleDraftTitle.trim() && moduleDraftSubject && moduleDraftTopic && moduleDraftLevel && hasSource;
+  const safeTitle = String(moduleDraftTitle || "");
+  const safeDescription = String(moduleDraftDescription || "");
+  const safeLinkUrl = String(moduleDraftLinkUrl || "");
+  const hasSource = moduleDraftKind === "link" ? safeLinkUrl.trim() : !!moduleDraftFile;
+  const canSubmit = safeTitle.trim() && moduleDraftSubject && moduleDraftTopic && moduleDraftLevel && hasSource;
 
   function handleSubmit() {
     if (!canSubmit) return;
     submitModuleUpload({
-      title: moduleDraftTitle.trim(),
+      title: safeTitle.trim(),
       subject: moduleDraftSubject,
       topic: moduleDraftTopic,
       level: moduleDraftLevel,
-      description: moduleDraftDescription.trim(),
-      tags: moduleDraftTags,
+      description: safeDescription.trim(),
+      tags: String(moduleDraftTags || ""),
       kind: moduleDraftKind,
       file: moduleDraftFile,
-      linkUrl: moduleDraftLinkUrl.trim(),
+      linkUrl: safeLinkUrl.trim(),
     });
     setUploadingModule(false);
     resetModuleDraft();
@@ -1125,29 +1128,6 @@ function ModuleUploadComposer({
       </button>
 
       <div style={{ padding: "20px 22px", borderRadius: 16, background: c.card, border: `1px solid ${c.line}`, display: "flex", flexDirection: "column", gap: 14 }}>
-        <div>
-          <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 6 }}>Jenis modul</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {[
-              { key: "file", label: "📄 Upload file" },
-              { key: "link", label: "🔗 Tambah link" },
-            ].map((opt) => (
-              <button
-                key={opt.key}
-                onClick={() => setModuleDraftKind(opt.key)}
-                style={{
-                  flex: 1, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontFamily: sans, fontSize: 12.5, fontWeight: 700,
-                  border: moduleDraftKind === opt.key ? "none" : `1px solid ${c.line}`,
-                  background: moduleDraftKind === opt.key ? c.blueSoft : "transparent",
-                  color: moduleDraftKind === opt.key ? c.blue : c.inkMuted,
-                }}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
         <div>
           <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 6 }}>Judul modul</div>
           <input
@@ -1257,6 +1237,23 @@ function ModuleUploadComposer({
             </button>
           </div>
         )}
+
+        <div>
+          <button
+            onClick={() => {
+              if (moduleDraftKind === "link") {
+                setModuleDraftKind("file");
+                setModuleDraftLinkUrl("");
+              } else {
+                setModuleDraftKind("link");
+                setModuleDraftFile(null);
+              }
+            }}
+            style={{ background: "none", border: "none", cursor: "pointer", fontFamily: sans, fontSize: 11.5, fontWeight: 700, color: c.blue, padding: 0 }}
+          >
+            {moduleDraftKind === "link" ? "← Kembali ke upload file" : "+ Tambah link (Canva, Google Docs, dll)"}
+          </button>
+        </div>
 
         <button
           disabled={!canSubmit}
