@@ -1,88 +1,81 @@
-// API route: POST /api/profile/photo
+// API route: POST/DELETE /api/profile/photo
 //
-// Handles the real (non-base64-in-state) profile photo upload flow:
-//   1. Verify the caller's Supabase session token -> get their real user id
-//      (never trust a username/id sent in the request body — that could be
-//      forged to overwrite someone else's photo)
-//   2. Upload the image to Cloudinary, into the "avatars" folder, using the
-//      avatar_upload preset's transformation (400x400 crop) set up earlier
-//   3. Save the resulting Cloudinary URL to that user's row in `profiles`
+// POST   -> menyimpan foto profil. Cara utama (dipakai browser): foto sudah
+//           diunggah LANGSUNG ke Cloudinary lewat /api/cloudinary-signature
+//           (purpose "avatar"), lalu browser mengirim JSON { publicId }. Server
+//           memverifikasi file itu ke Cloudinary dan menyimpan URL-nya. Cara
+//           lama (multipart/form-data dengan field "photo") tetap didukung untuk
+//           file kecil; di Vercel body dibatasi 4,5 MB.
+// DELETE -> menghapus foto: mengosongkan photo_url dan menghapus aset Cloudinary
+//           (kalau tidak, foto lama tetap memakan kuota storage selamanya).
 //
-// The frontend calls this with a single image file (multipart/form-data)
-// and an Authorization: Bearer <access_token> header.
+// Identitas selalu dari token Supabase, tidak pernah dari body request.
 
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { cloudinary } from "@/lib/cloudinary";
+import { verifyUpload, AVATAR_MAX_BYTES, IMAGE_MIME_TYPES } from "@/lib/cloudinaryUploads";
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB — generous for a profile photo, cheap on Cloudinary credits
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
+async function getUser(request) {
+  const authHeader = request.headers.get("authorization") || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "");
+  if (!token) return { error: NextResponse.json({ error: "Tidak ada token autentikasi." }, { status: 401 }) };
+  const {
+    data: { user },
+    error: authError,
+  } = await supabaseAdmin.auth.getUser(token);
+  if (authError || !user) {
+    return { error: NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 }) };
+  }
+  return { user };
+}
+
+async function savePhotoUrl(userId, url) {
+  const { error } = await supabaseAdmin.from("profiles").update({ photo_url: url }).eq("id", userId);
+  if (error) {
+    console.error("Gagal menyimpan photo_url ke profiles:", error);
+    return NextResponse.json({ error: "Foto terupload tapi gagal disimpan ke profil. Coba lagi." }, { status: 500 });
+  }
+  return null;
+}
 
 export async function POST(request) {
   try {
-    // ---- 1. Verify who's actually calling ----------------------------
-    const authHeader = request.headers.get("authorization") || "";
-    const token = authHeader.replace(/^Bearer\s+/i, "");
-    if (!token) {
-      return NextResponse.json({ error: "Tidak ada token autentikasi." }, { status: 401 });
+    const { user, error: authFail } = await getUser(request);
+    if (authFail) return authFail;
+
+    // ---- Cara utama: foto sudah diunggah langsung ke Cloudinary ----------
+    if ((request.headers.get("content-type") || "").includes("application/json")) {
+      const body = await request.json().catch(() => ({}));
+      const check = await verifyUpload({ publicId: body.publicId, resourceType: "image", purpose: "avatar", userId: user.id });
+      if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+      const failed = await savePhotoUrl(user.id, check.resource.secure_url);
+      if (failed) return failed;
+      return NextResponse.json({ photoUrl: check.resource.secure_url });
     }
 
-    const {
-      data: { user },
-      error: authError,
-    } = await supabaseAdmin.auth.getUser(token);
-
-    if (authError || !user) {
-      return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
-    }
-
-    // ---- 2. Read & validate the uploaded file ------------------------
+    // ---- Cara lama: multipart (hanya aman untuk file kecil di Vercel) -----
     const formData = await request.formData();
     const file = formData.get("photo");
-
     if (!file || typeof file === "string") {
       return NextResponse.json({ error: "Tidak ada file yang diupload." }, { status: 400 });
     }
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      return NextResponse.json(
-        { error: "Format file tidak didukung. Pakai JPG, PNG, atau WebP." },
-        { status: 400 }
-      );
+    if (!IMAGE_MIME_TYPES.includes(file.type)) {
+      return NextResponse.json({ error: "Format file tidak didukung. Pakai JPG, PNG, atau WebP." }, { status: 400 });
     }
-    if (file.size > MAX_FILE_BYTES) {
+    if (file.size > AVATAR_MAX_BYTES) {
       return NextResponse.json({ error: "Ukuran file maksimal 5MB." }, { status: 400 });
     }
-
-    // ---- 3. Upload to Cloudinary --------------------------------------
-    // file.arrayBuffer() -> Buffer -> base64 data URI is the simplest way
-    // to hand an in-memory file to Cloudinary's Node SDK without touching
-    // the filesystem (there's no disk to write to on serverless hosts
-    // like Vercel anyway).
     const bytes = await file.arrayBuffer();
-    const base64 = Buffer.from(bytes).toString("base64");
-    const dataUri = `data:${file.type};base64,${base64}`;
-
+    const dataUri = `data:${file.type};base64,${Buffer.from(bytes).toString("base64")}`;
     const uploadResult = await cloudinary.uploader.upload(dataUri, {
       folder: "avatars",
-      public_id: `user_${user.id}`, // stable id -> re-uploading REPLACES the old photo instead of accumulating new ones
+      public_id: `user_${user.id}`, // id tetap -> unggah ulang MENGGANTI foto lama
       overwrite: true,
       transformation: [{ width: 400, height: 400, crop: "fill" }],
     });
-
-    // ---- 4. Save the URL to this user's profile row -------------------
-    const { error: updateError } = await supabaseAdmin
-      .from("profiles")
-      .update({ photo_url: uploadResult.secure_url })
-      .eq("id", user.id);
-
-    if (updateError) {
-      console.error("Gagal menyimpan photo_url ke profiles:", updateError);
-      return NextResponse.json(
-        { error: "Foto terupload tapi gagal disimpan ke profil. Coba lagi." },
-        { status: 500 }
-      );
-    }
-
+    const failed = await savePhotoUrl(user.id, uploadResult.secure_url);
+    if (failed) return failed;
     return NextResponse.json({ photoUrl: uploadResult.secure_url });
   } catch (err) {
     console.error("Gagal upload foto profil:", err);
@@ -90,48 +83,27 @@ export async function POST(request) {
   }
 }
 
-// DELETE /api/profile/photo — removes the current user's profile photo:
-// clears photos_url in Supabase AND deletes the underlying asset from
-// Cloudinary (skipping this second step would leave the old photo taking up
-// storage quota forever, invisible from the app but still counted against
-// the Cloudinary free-tier credits).
 export async function DELETE(request) {
   try {
-    const authHeader = request.headers.get("authorization") || "";
-    const token = authHeader.replace(/^Bearer\s+/i, "");
-    if (!token) {
-      return NextResponse.json({ error: "Tidak ada token autentikasi." }, { status: 401 });
+    const { user, error: authFail } = await getUser(request);
+    if (authFail) return authFail;
+
+    // public_id deterministik (avatars/user_<id>), tidak perlu lookup dulu.
+    // Dicoba kedua bentuk id: akun Cloudinary mode folder lama memakai "avatars/user_<id>",
+    // mode folder dinamis memakai "user_<id>". Tidak fatal kalau salah satunya tidak ada.
+    for (const publicId of [`avatars/user_${user.id}`, `user_${user.id}`]) {
+      try {
+        await cloudinary.uploader.destroy(publicId);
+      } catch (cloudinaryErr) {
+        console.error("Gagal menghapus asset Cloudinary (lanjut menghapus dari DB):", cloudinaryErr);
+      }
     }
 
-    const {
-      data: { user },
-      error: authError,
-    } = await supabaseAdmin.auth.getUser(token);
-
-    if (authError || !user) {
-      return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
-    }
-
-    // public_id is deterministic (user_<id>, set at upload time above), so
-    // we don't need to look anything up before deleting from Cloudinary.
-    try {
-      await cloudinary.uploader.destroy(`avatars/user_${user.id}`);
-    } catch (cloudinaryErr) {
-      // Not fatal — if the asset was already gone (e.g. deleted twice), we
-      // still want to make sure photo_url is cleared in the database below.
-      console.error("Gagal menghapus asset Cloudinary (lanjut menghapus dari DB):", cloudinaryErr);
-    }
-
-    const { error: updateError } = await supabaseAdmin
-      .from("profiles")
-      .update({ photo_url: null })
-      .eq("id", user.id);
-
+    const { error: updateError } = await supabaseAdmin.from("profiles").update({ photo_url: null }).eq("id", user.id);
     if (updateError) {
       console.error("Gagal menghapus photo_url dari profiles:", updateError);
       return NextResponse.json({ error: "Gagal menghapus foto dari profil." }, { status: 500 });
     }
-
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("Gagal menghapus foto profil:", err);

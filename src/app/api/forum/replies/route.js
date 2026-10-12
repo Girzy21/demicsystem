@@ -4,10 +4,15 @@
 // /api/forum/posts' auth + upload pattern. parent_id is null for a
 // top-level reply (directly to the post) and set to another reply's id
 // for a nested reply-to-reply.
+//
+// Setelah balasan tersimpan, embedding thread (post induk) diperbarui
+// supaya pencarian semantik ikut "melihat" isi balasan terbaru.
 
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { cloudinary } from "@/lib/cloudinary";
+import { verifyUpload } from "@/lib/cloudinaryUploads";
+import { embedForumPost } from "@/lib/embeddings";
 
 const MAX_IMAGES = 4;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -29,12 +34,21 @@ export async function POST(request) {
       return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
     }
 
-    // ---- 2. Read form fields ----------------------------
-    const formData = await request.formData();
-    const postId = (formData.get("postId") || "").toString();
-    const parentId = formData.get("parentId") ? formData.get("parentId").toString() : null;
-    const body = (formData.get("body") || "").toString().trim();
-    const images = formData.getAll("images").filter((f) => typeof f !== "string");
+    // ---- 2. Baca field: JSON (cara utama) atau multipart (cara lama) ----
+    const isJson = (request.headers.get("content-type") || "").includes("application/json");
+    let jsonBody = null;
+    let formData = null;
+    if (isJson) jsonBody = await request.json().catch(() => ({}));
+    else formData = await request.formData();
+    const str = (name) => {
+      const v = isJson ? jsonBody[name] : formData.get(name);
+      return v === null || v === undefined ? "" : String(v);
+    };
+    const postId = str("postId");
+    const parentId = str("parentId") || null;
+    const body = str("body").trim();
+    const direct = isJson ? (Array.isArray(jsonBody.images) ? jsonBody.images : []) : [];
+    const images = isJson ? [] : formData.getAll("images").filter((f) => typeof f !== "string");
 
     if (!postId) {
       return NextResponse.json({ error: "postId wajib diisi." }, { status: 400 });
@@ -42,7 +56,7 @@ export async function POST(request) {
     if (!body) {
       return NextResponse.json({ error: "Isi balasan tidak boleh kosong." }, { status: 400 });
     }
-    if (images.length > MAX_IMAGES) {
+    if (images.length + direct.length > MAX_IMAGES) {
       return NextResponse.json({ error: `Maksimal ${MAX_IMAGES} gambar per balasan.` }, { status: 400 });
     }
     for (const file of images) {
@@ -54,18 +68,27 @@ export async function POST(request) {
       }
     }
 
-    // ---- 3. Upload images to Cloudinary (in parallel) ----------------
-    const uploadedUrls = await Promise.all(
-      images.map(async (file) => {
-        const bytes = await file.arrayBuffer();
-        const base64 = Buffer.from(bytes).toString("base64");
-        const dataUri = `data:${file.type};base64,${base64}`;
-        const result = await cloudinary.uploader.upload(dataUri, {
-          folder: "forum-attachments",
-          transformation: [{ width: 1600, crop: "limit" }],
-        });
-        return result.secure_url;
-      })
+    // ---- 3. Gambar: verifikasi upload langsung / upload lama lewat server ----
+    const uploadedUrls = [];
+    for (const item of direct) {
+      const check = await verifyUpload({ publicId: item && item.publicId, resourceType: "image", purpose: "forum", userId: user.id });
+      if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+      uploadedUrls.push(check.resource.secure_url);
+    }
+    uploadedUrls.push(
+      ...(await Promise.all(
+        images.map(async (file) => {
+          const bytes = await file.arrayBuffer();
+          const base64 = Buffer.from(bytes).toString("base64");
+          const dataUri = `data:${file.type};base64,${base64}`;
+          const result = await cloudinary.uploader.upload(dataUri, {
+            folder: "forum-attachments",
+            transformation: [{ width: 1600, crop: "limit" }],
+            context: `uploader=${user.id}|purpose=forum`,
+          });
+          return result.secure_url;
+        })
+      ))
     );
 
     // ---- 4. Insert the reply row ----------------------------
@@ -98,6 +121,9 @@ export async function POST(request) {
         { status: 500 }
       );
     }
+
+    // ---- 5. Perbarui embedding thread (tidak pernah melempar error) ----
+    await embedForumPost(postId);
 
     return NextResponse.json({ reply });
   } catch (err) {

@@ -17,7 +17,7 @@ import { supabase } from "@/lib/supabaseClient";
 // templates/resources area, etc.) — ranked by fit to the kind of thing
 // being asked for, not literal title overlap. Other examples it should
 // eventually handle: "contoh lab report fisika", "rubrik TOK essay",
-// "silabus lengkap Math AA".
+// "silabus lengkap Math".
 //
 // See the longer note right above runUniversalSearch() for the concrete
 // implementation implications (real embeddings, broader corpus,
@@ -112,80 +112,73 @@ function UsernameAvatar({ username, size = 40, photoUrl = null }) {
 // subject/topic they're currently spending time on — optional, ties back
 // into the subject/topic vocabulary already used across the app). This is a
 // first draft shape, meant to be revised.
-const USERS = {
-  kuncipas: {
-    username: "kuncipas",
-    realName: "",
-    showRealName: false,
-    photoUrl: null,
-    headline: "",
-    interests: [],
-    skills: [],
-    goal: "",
-    focus: null,
-    joined: "Agustus 2026",
-  },
-  senjaputih: {
-    username: "senjaputih",
-    realName: "Aditya Nugraha",
-    showRealName: true,
-    photoUrl: null,
-    headline: "Suka bikin ringkasan yang orang lain males bikin.",
-    interests: ["Fisika teoretis", "musik lo-fi", "board game"],
-    skills: ["Physics HL", "LaTeX", "desain slide"],
-    goal: "Lulus IB dengan skor 40+ dan lanjut kuliah teknik fisika.",
-    focus: { subject: "Physics", topic: "Waves & Oscillation" },
-    joined: "Januari 2026",
-  },
-  rimbakata: {
-    username: "rimbakata",
-    realName: "Rania Kirana",
-    showRealName: false,
-    photoUrl: null,
-    headline: "Lagi banyak mikirin knowledge questions buat TOK.",
-    interests: ["filsafat", "menulis", "debat"],
-    skills: ["TOK essay", "riset"],
-    goal: "Menulis esai TOK yang benar-benar orisinal, bukan sekadar formula aman.",
-    focus: { subject: "TOK", topic: "Essay Prep" },
-    joined: "Januari 2026",
-  },
-  bintangkecil: {
-    username: "bintangkecil",
-    realName: "",
-    showRealName: false,
-    photoUrl: null,
-    headline: "Kalkulus itu susah tapi seru kalau udah connect.",
-    interests: ["catur"],
-    skills: ["Math AA HL"],
-    goal: "",
-    focus: { subject: "Math AA", topic: "Calculus" },
-    joined: "Februari 2026",
-  },
-};
+// ---- upload langsung ke Cloudinary (anti batas 4,5 MB Vercel) -----------------------------------
+// File TIDAK lewat server kita: browser minta tanda tangan ke /api/cloudinary-signature
+// (server menentukan folder, nama file, transformasi, dan batas ukuran), lalu
+// mengunggah langsung ke Cloudinary. Ke server hanya dikirim JSON kecil berisi
+// public_id hasil upload, yang diverifikasi server sebelum disimpan.
+// purpose: "module" | "forum" | "avatar". Mengembalikan { publicId, resourceType }.
+async function uploadDirectToCloudinary(file, purpose, token) {
+  const fail = (message) => {
+    const e = new Error(message);
+    e.uploadMessage = message; // pesan yang aman ditampilkan ke pengguna
+    return e;
+  };
+  const sigRes = await fetch("/api/cloudinary-signature", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ purpose, filename: file.name || "image.jpg", contentType: file.type, size: file.size }),
+  });
+  const sig = await sigRes.json().catch(() => ({}));
+  if (!sigRes.ok) throw fail(sig.error || "Gagal menyiapkan upload.");
 
-function getUser(username) {
-  return (
-    USERS[username] || {
-      username,
-      realName: "",
-      showRealName: false,
-      photoUrl: null,
-      headline: "",
-      interests: [],
-      skills: [],
-      goal: "",
-      focus: null,
-      joined: null,
-    }
-  );
+  const fd = new FormData();
+  fd.append("file", file);
+  for (const [key, value] of Object.entries(sig.params)) fd.append(key, String(value));
+  fd.append("api_key", sig.apiKey);
+  fd.append("signature", sig.signature);
+  const upRes = await fetch(`https://api.cloudinary.com/v1_1/${sig.cloudName}/${sig.resourceType}/upload`, { method: "POST", body: fd });
+  const up = await upRes.json().catch(() => ({}));
+  if (!upRes.ok) throw fail((up.error && up.error.message) || "Upload ke penyimpanan gagal. Coba lagi.");
+  return { publicId: up.public_id, resourceType: sig.resourceType };
+}
+
+// Profil kosong untuk username yang belum (atau tidak) punya data profil.
+// Data profil asli dimuat dari GET /api/profiles (lihat Homepage).
+function emptyProfile(username) {
+  return { username, realName: "", showRealName: false, photoUrl: null, headline: "", interests: [], skills: [], goal: "", focus: null, joined: null };
+}
+
+// "2026-08-17T..." -> "Agustus 2026"
+function formatJoinedId(iso) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d.getTime())) return null;
+  const label = d.toLocaleDateString("id-ID", { month: "long", year: "numeric" });
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+// Bentuk profil dari GET /api/profiles -> bentuk yang dipakai UI profil.
+function profileFromApi(row) {
+  return {
+    username: row.username,
+    realName: row.realName || "",
+    showRealName: !!row.showRealName,
+    photoUrl: row.photoUrl || null,
+    headline: row.headline || "",
+    interests: row.interests || [],
+    skills: row.skills || [],
+    goal: row.goal || "",
+    focus: row.focus || null,
+    joined: formatJoinedId(row.createdAt),
+  };
 }
 
 const NAV_ITEMS = [
-  { key: "home", label: "Beranda", icon: "⌂" },
-  { key: "modules", label: "Bank Modul", icon: "▤" },
-  { key: "activity", label: "Aktivitas Terbaru", icon: "◷" },
-  { key: "forum", label: "Forum Diskusi", icon: "◔" },
-  { key: "profile", label: "Profil", icon: "◐" },
+  { key: "home", label: "Home", icon: "⌂" },
+  { key: "modules", label: "Module Bank", icon: "▤" },
+  { key: "activity", label: "Recent Activity", icon: "◷" },
+  { key: "forum", label: "Discussion Forum", icon: "◔" },
+  { key: "profile", label: "Profile", icon: "◐" },
 ];
 
 // Folder tree: Subject → Topic. This is the primary organizing structure —
@@ -204,12 +197,17 @@ const NAV_ITEMS = [
 const FOLDER_TREE = {
   Physics: ["Mechanics", "Waves & Oscillation", "Thermal Physics", "Electricity & Magnetism"],
   Chemistry: ["Organic Chemistry", "Atomic Structure", "Equilibrium", "Acids & Bases"],
-  "Math AA": ["Calculus", "Algebra", "Statistics & Probability", "Geometry & Trigonometry"],
-  "Math AI": ["Statistics & Probability", "Modelling", "Calculus"],
+  // Math AA and Math AI used to be separate subjects (mirroring the IB's
+  // "Analysis & Approaches" / "Applications & Interpretation" split). Merged
+  // into one Math folder per explicit requirement — the SL/HL-style route
+  // distinction isn't tracked anymore, just the topic itself. Topic list is
+  // the union of both former lists, de-duplicated.
+  Math: ["Calculus", "Algebra", "Statistics & Probability", "Geometry & Trigonometry", "Modelling"],
   Biology: ["Cell Biology", "Genetics", "Ecology", "Human Physiology"],
   Economics: ["Microeconomics", "Macroeconomics", "International Trade"],
   "Business Mgmt": ["Marketing", "Finance & Accounts", "Human Resources"],
-  "English Lit": ["Poetry Analysis", "Prose Fiction", "Paper 2 Comparative"],
+  // Was "English Lit" — merged/renamed to plain "English" per explicit requirement.
+  English: ["Poetry Analysis", "Prose Fiction", "Paper 2 Comparative"],
   History: ["Cold War", "Authoritarian States", "Independence Movements"],
   TOK: ["Knowledge Questions", "Essay Prep", "Exhibition"],
   CAS: ["Creativity", "Activity", "Service", "CAS Project"],
@@ -502,166 +500,54 @@ const RIASEC_DECISION_TREES = {
   },
 };
 
-// (user-picked) and ai (model-suggested, carries a confidence score) — this
-// is the shape a future classifier would populate, not something computed here.
-const MODULES = [
-  {
-    title: "Ringkasan Waves & Oscillation SL/HL",
-    subject: "Physics",
-    topic: "Waves & Oscillation",
-    uploader: "senjaputih",
-    type: "PDF",
-    level: "HL",
-    size: "2.4 MB",
-    date: "12 menit lalu",
-    tags: [
-      { label: "SL/HL", source: "manual" },
-      { label: "resonance", source: "ai", confidence: 0.91 },
-      { label: "doppler effect", source: "ai", confidence: 0.68 },
-    ],
-  },
-  {
-    title: "Rangkuman Organic Chemistry Reaction Pathways",
-    subject: "Chemistry",
-    topic: "Organic Chemistry",
-    uploader: "kabutmalam",
-    type: "PDF",
-    level: "HL",
-    size: "3.1 MB",
-    date: "2 jam lalu",
-    tags: [
-      { label: "reaction mechanism", source: "manual" },
-      { label: "SN1/SN2", source: "ai", confidence: 0.87 },
-    ],
-  },
-  {
-    title: "Catatan Integral & Teknik Substitusi",
-    subject: "Math AA",
-    topic: "Calculus",
-    uploader: "bintangkecil",
-    type: "DOCX",
-    level: "Both",
-    size: "780 KB",
-    date: "38 menit lalu",
-    tags: [
-      { label: "integration", source: "manual" },
-      { label: "u-substitution", source: "ai", confidence: 0.94 },
-      { label: "paper 2 style", source: "ai", confidence: 0.55 },
-    ],
-  },
-  {
-    title: "Cheat Sheet Elasticity of Demand",
-    subject: "Economics",
-    topic: "Microeconomics",
-    uploader: "arusdaun",
-    type: "PDF",
-    level: "SL",
-    size: "540 KB",
-    date: "1 jam lalu",
-    tags: [{ label: "elasticity", source: "manual" }],
-  },
-  {
-    title: "Jurnal Refleksi CAS Project: Kelas Coding untuk Anak SD",
-    subject: "CAS",
-    topic: "CAS Project",
-    uploader: "elangpetang",
-    type: "PPTX",
-    level: "Both",
-    size: "5.6 MB",
-    date: "5 jam lalu",
-    tags: [
-      { label: "service", source: "manual" },
-      { label: "reflection log", source: "ai", confidence: 0.89 },
-    ],
-  },
-  {
-    title: "Peta Konsep Knowledge Questions",
-    subject: "TOK",
-    topic: "Knowledge Questions",
-    uploader: "rimbakata",
-    type: "PDF",
-    level: "Both",
-    size: "1.2 MB",
-    date: "3 jam lalu",
-    tags: [{ label: "concept map", source: "manual" }],
-  },
-  {
-    title: "Latihan Soal Mechanics Paper 1",
-    subject: "Physics",
-    topic: "Mechanics",
-    uploader: "hujanlangit",
-    type: "PDF",
-    level: "SL",
-    size: "1.8 MB",
-    date: "6 jam lalu",
-    tags: [
-      { label: "practice questions", source: "manual" },
-      { label: "kinematics", source: "ai", confidence: 0.78 },
-    ],
-  },
-  {
-    title: "Ringkasan Cell Biology & Genetics",
-    subject: "Biology",
-    topic: "Cell Biology",
-    uploader: "daunkering",
-    type: "DOCX",
-    level: "HL",
-    size: "2.0 MB",
-    date: "8 jam lalu",
-    tags: [{ label: "mitosis", source: "ai", confidence: 0.72 }],
-  },
-  {
-    title: "Slide Market Structure & Competition",
-    subject: "Economics",
-    topic: "Microeconomics",
-    uploader: "arusdaun",
-    type: "PPTX",
-    level: "HL",
-    size: "4.3 MB",
-    date: "10 jam lalu",
-    tags: [{ label: "market structure", source: "manual" }],
-  },
-  {
-    title: "Template IA Lab Report Fisika",
-    subject: "Physics",
-    topic: "Mechanics",
-    uploader: "senjaputih",
-    type: "DOCX",
-    level: "Both",
-    size: "620 KB",
-    date: "12 jam lalu",
-    tags: [{ label: "internal assessment", source: "manual" }],
-  },
-  {
-    title: "Ringkasan Singkat: Stoicism buat Sehari-hari",
-    subject: "Philosophy",
-    topic: "Bacaan & Renungan",
-    uploader: "mentaripagi",
-    type: "PDF",
-    level: "Both",
-    size: "1.5 MB",
-    date: "1 hari lalu",
-    isShare: true, // sharing, bukan materi/silabus resmi
-    tags: [{ label: "sharing", source: "manual" }, { label: "stoicism", source: "manual" }],
-  },
-  {
-    title: "Analisis Puisi untuk English Lit Paper 2",
-    subject: "English Lit",
-    topic: "Poetry Analysis",
-    uploader: "rimbakata",
-    type: "DOCX",
-    level: "HL",
-    size: "900 KB",
-    date: "1 hari lalu",
-    tags: [
-      { label: "poetry", source: "manual" },
-      { label: "comparative analysis", source: "ai", confidence: 0.63 },
-    ],
-  },
-];
 
-function moduleCountFor(subject, topic) {
-  return MODULES.filter((m) => m.subject === subject && (!topic || m.topic === topic)).length;
+// Menghitung modul di sebuah folder. `extra` = modul asli dari database
+// (localModules). Perbandingan
+// topik tidak peduli huruf besar/kecil.
+function moduleCountFor(subject, topic, extra, kind) {
+  const want = topic ? String(topic).trim().toLowerCase() : null;
+  return (extra || []).filter(
+    (m) => m.subject === subject && (!want || String(m.topic || "").trim().toLowerCase() === want) && matchesModuleKind(m, kind)
+  ).length;
+}
+
+// Filter jenis modul di Bank Modul: "all" | "material" (materi) | "exercise" (latihan soal).
+function matchesModuleKind(m, kind) {
+  if (kind === "exercise") return !!m.isExercise;
+  if (kind === "material") return !m.isExercise;
+  return true;
+}
+
+// Daftar topik sebuah subject = topik bawaan (FOLDER_TREE) + topik kustom yang
+// diketik pengguna saat upload. Dulu folder hanya dibaca dari FOLDER_TREE,
+// sehingga modul dengan topik kustom tidak pernah punya folder (tetapi tetap
+// muncul di pencarian).
+function moduleTopicsFor(subject, extra) {
+  const base = FOLDER_TREE[subject] || [];
+  const seen = new Set(base.map((t) => t.toLowerCase()));
+  const custom = [];
+  for (const m of extra || []) {
+    if (m.subject !== subject || !m.topic) continue;
+    const key = String(m.topic).trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    custom.push(String(m.topic).trim());
+  }
+  custom.sort((a, b) => a.localeCompare(b));
+  return [...base.map((t) => ({ name: t, isNew: false })), ...custom.map((t) => ({ name: t, isNew: true }))];
+}
+
+// Menyamakan penulisan topik yang diketik pengguna dengan folder yang sudah
+// ada ("waves & oscillation" -> "Waves & Oscillation"), supaya tidak muncul
+// dua folder yang sama hanya karena beda huruf besar/kecil.
+function canonicalTopic(subject, topic, extra) {
+  const wanted = String(topic || "").trim();
+  const key = wanted.toLowerCase();
+  const fromTree = (FOLDER_TREE[subject] || []).find((t) => t.toLowerCase() === key);
+  if (fromTree) return { topic: fromTree, isCustom: false };
+  const fromExisting = (extra || []).find((m) => m.subject === subject && m.topic && String(m.topic).trim().toLowerCase() === key);
+  if (fromExisting) return { topic: String(fromExisting.topic).trim(), isCustom: true };
+  return { topic: wanted, isCustom: true };
 }
 
 // ---- simulated universal search results -------------------------------------------------
@@ -692,191 +578,6 @@ const POST_TYPES = {
   pertanyaan: { label: "Pertanyaan", icon: "❔", color: "#2C7BE5" },
 };
 
-const FORUM_POSTS = [
-  {
-    id: "p1",
-    postType: "ide",
-    body: "Kepikiran buat bikin kegiatan service sederhana — ngajarin literasi digital dasar (hindari hoax, cara aman pakai medsos) buat warga sekitar dorm/sekolah. Bisa jadi CAS Project bareng kalau ada yang minat. Ada yang mau join rancang programnya?",
-    subject: "CAS",
-    topic: "Service",
-    author: "rimbakata",
-    time: "22 menit lalu",
-    attachment: null,
-    images: [],
-    likes: 6,
-    likedByMe: false,
-    bookmarkedByMe: false,
-    replies: [
-      {
-        id: "r1",
-        parentId: null,
-        author: "kuncipas",
-        body: "Aku tertarik ikutan! Kalau soal materinya, mungkin bisa pakai contoh kasus hoax yang lagi ramai biar lebih related buat pesertanya.",
-        time: "14 menit lalu",
-        attachment: null,
-        images: [],
-        likes: 3,
-        likedByMe: false,
-      },
-      {
-        id: "r1a",
-        parentId: "r1",
-        author: "rimbakata",
-        body: "Setuju, aku ada beberapa contoh kasus yang lagi viral minggu ini. Nanti aku kirim linknya.",
-        time: "10 menit lalu",
-        attachment: null,
-        images: [],
-        likes: 2,
-        likedByMe: true,
-      },
-    ],
-  },
-  {
-    id: "p2",
-    postType: "pertanyaan",
-    body: "Aku selalu bingung kalau ketemu soal integral yang ada sin/cos-nya, apalagi kalau harus substitusi dulu. Ada tips urutan langkah yang sistematis nggak?",
-    subject: "Math AA",
-    topic: "Calculus",
-    author: "bintangkecil",
-    time: "38 menit lalu",
-    attachment: null,
-    images: [],
-    likes: 4,
-    likedByMe: false,
-    bookmarkedByMe: true,
-    replies: [
-      {
-        id: "r2",
-        parentId: null,
-        author: "kuncipas",
-        body: "Biasanya aku cek dulu apakah bisa pakai identitas trig buat sederhanain sebelum substitusi. Kalau ada sin²x atau cos²x, ubah dulu pakai identitas sudut ganda.",
-        time: "20 menit lalu",
-        attachment: null,
-        images: [],
-        likes: 5,
-        likedByMe: true,
-      },
-      {
-        id: "r3",
-        parentId: null,
-        author: "senjaputih",
-        body: "Setuju sama di atas, tambahan aja: kalau masih stuck coba substitusi u = sin x atau u = cos x tergantung mana yang turunannya juga ada di soal.",
-        time: "15 menit lalu",
-        attachment: null,
-        images: [],
-        likes: 2,
-        likedByMe: false,
-      },
-      {
-        id: "r3a",
-        parentId: "r3",
-        author: "bintangkecil",
-        body: "Ohh baru ngeh, makasih! Langsung kepikiran soal yang tadi bikin stuck.",
-        time: "9 menit lalu",
-        attachment: null,
-        images: [],
-        likes: 1,
-        likedByMe: false,
-      },
-    ],
-  },
-  {
-    id: "p3",
-    postType: "sharing",
-    body: "Lagi cari referensi buat organic chemistry, nemu ringkasan yang mekanismenya digambar step-by-step jadi jauh lebih kebayang dibanding di textbook. Nempel filenya di bawah — siapa tau berguna buat yang lain juga.",
-    subject: "Chemistry",
-    topic: "Organic Chemistry",
-    author: "kabutmalam",
-    time: "1 jam lalu",
-    attachment: { name: "sn1-sn2-mechanism-notes.pdf", size: "1.1 MB" },
-    images: [],
-    likes: 11,
-    likedByMe: true,
-    bookmarkedByMe: true,
-    replies: [
-      {
-        id: "r4",
-        parentId: null,
-        author: "hujanlangit",
-        body: "Makasih udah share! Ini ngebantu banget buat ngebedain dari sisi mekanisme, bukan cuma hafalan ciri-ciri doang.",
-        time: "45 menit lalu",
-        attachment: null,
-        images: [],
-        likes: 4,
-        likedByMe: false,
-      },
-    ],
-  },
-  {
-    id: "p4",
-    postType: "diskusi",
-    body: "Lagi mikirin knowledge question yang nggak terlalu umum buat area of knowledge The Arts. Ada saran arah yang menarik buat didiskusiin bareng?",
-    subject: "TOK",
-    topic: "Essay Prep",
-    author: "rimbakata",
-    time: "3 jam lalu",
-    attachment: null,
-    images: [],
-    likes: 3,
-    likedByMe: false,
-    bookmarkedByMe: false,
-    replies: [
-      {
-        id: "r5",
-        parentId: null,
-        author: "mentaripagi",
-        body: "Coba arah tentang sejauh mana emosi pembuat karya seni bisa dianggap sebagai 'pengetahuan' — itu selalu memancing diskusi bagus.",
-        time: "2 jam lalu",
-        attachment: null,
-        images: [],
-        likes: 6,
-        likedByMe: true,
-      },
-    ],
-  },
-  {
-    id: "p5",
-    postType: "sharing",
-    body: "Habis baca-baca soal Stoicism, dan ternyata konsepnya cukup related sama keseharian — soal bedain mana yang bisa kita kontrol dan mana yang enggak. Nulis ringkasan singkatnya dan nempel filenya, siapa tau ada yang butuh insight serupa buat ngadepin hari yang berat.",
-    subject: "Philosophy",
-    topic: "Bacaan & Renungan",
-    author: "elangpetang",
-    time: "5 jam lalu",
-    attachment: { name: "ringkasan-stoicism-sehari-hari.pdf", size: "1.5 MB" },
-    images: [],
-    likes: 9,
-    likedByMe: false,
-    bookmarkedByMe: false,
-    replies: [
-      {
-        id: "r6",
-        parentId: null,
-        author: "daunkering",
-        body: "Makasih udah share, ini related banget sama yang lagi aku pikirin belakangan. Ada rekomendasi bacaan lanjutan nggak?",
-        time: "4 jam lalu",
-        attachment: null,
-        images: [],
-        likes: 2,
-        likedByMe: false,
-      },
-    ],
-  },
-  {
-    id: "p6",
-    postType: "diskusi",
-    body: "Bukan soal pelajaran — cuma kepikiran apa forum ini kedepannya juga cocok buat obrolan santai di luar akademi, semacam ruang buat sharing hal random juga. Mau denger pendapat orang lain dulu.",
-    subject: null,
-    topic: null,
-    author: "senjaputih",
-    time: "9 jam lalu",
-    attachment: null,
-    images: [],
-    likes: 7,
-    likedByMe: false,
-    bookmarkedByMe: false,
-    replies: [],
-  },
-];
 
 // Counts every reply in a thread, including nested replies-to-replies —
 // replies is the flat array (each item optionally has a parentId), so this
@@ -886,175 +587,60 @@ function countAllReplies(replies) {
   return replies.length;
 }
 
-// This is a hand-written stand-in for what a real embedding/ML-based semantic
-// search would return later: given a query, it doesn't just keyword-match —
-// it separates "direct hits" from "foundational / related material" (e.g.
-// searching "gelombang" surfaces Physics waves content directly, plus
-// trigonometry and rotation modules because they're conceptually load-bearing
-// for understanding waves, even though the word "gelombang" never appears in
-// them). Real ranking/embeddings come later; this only proves out the UI shape.
-//
-// Four-tier structure, closer to how a real concept graph would categorize
-// results around a query:
-//   directHits    — modules that discuss the topic itself
-//   foundational  — prerequisite concepts needed to understand it (learn this first)
-//   supporting    — adjacent context that deepens understanding (helpful alongside)
-//   applied       — places where this same concept shows up in another subject/topic
-//   forumHits     — forum posts/discussions relevant to the query (optional; a query
-//                   need not have any — most module-only searches won't)
-//
-// IMPORTANT — see the "search roadmap" note near runUniversalSearch below:
-// this whole SEARCH_INDEX/runUniversalSearch pair is a placeholder for a single
-// module+forum lookup. The real search this is standing in for is meant to be
-// much broader than "find a module" or "find a thread" — e.g. a query like
-// "template proposal CAS" should be understood as a request for a *document
-// type* and surface the closest matching file regardless of which corner of
-// the app it lives in, not just literal title matches inside MODULES/FORUM_POSTS.
-const SEARCH_INDEX = [
-  {
-    query: "gelombang",
-    directHits: [
-      { moduleTitle: "Ringkasan Waves & Oscillation SL/HL", subject: "Physics", topic: "Waves & Oscillation" },
-      { moduleTitle: "Latihan Soal Mechanics Paper 1", subject: "Physics", topic: "Mechanics" },
-    ],
-    foundational: [
-      { moduleTitle: "Catatan Integral & Teknik Substitusi", subject: "Math AA", topic: "Calculus", reason: "fungsi periodik & trigonometri jadi dasar matematis gelombang" },
-    ],
-    supporting: [
-      { moduleTitle: "Template IA Lab Report Fisika", subject: "Physics", topic: "Mechanics", reason: "konsep gerak & rotasi sering muncul berdampingan dengan gelombang" },
-    ],
-    applied: [
-      { moduleTitle: "Ringkasan Cell Biology & Genetics", subject: "Biology", topic: "Cell Biology", reason: "sinyal listrik & getaran juga muncul dalam konteks sistem saraf di biologi" },
-    ],
-    forumHits: [],
-  },
-  {
-    query: "integral",
-    directHits: [{ moduleTitle: "Catatan Integral & Teknik Substitusi", subject: "Math AA", topic: "Calculus" }],
-    foundational: [],
-    supporting: [
-      { moduleTitle: "Rangkuman Cell Biology & Genetics", subject: "Biology", topic: "Cell Biology", reason: "laju perubahan populasi memakai logika yang sama dengan integral" },
-    ],
-    applied: [
-      { moduleTitle: "Ringkasan Waves & Oscillation SL/HL", subject: "Physics", topic: "Waves & Oscillation", reason: "integral dipakai untuk menghitung energi & luas area gelombang" },
-      { moduleTitle: "Cheat Sheet Elasticity of Demand", subject: "Economics", topic: "Microeconomics", reason: "menghitung surplus konsumen memakai integral" },
-    ],
-    forumHits: [{ postId: "p2", reason: "diskusi forum yang langsung membahas topik ini" }],
-  },
-  {
-    query: "reaksi kimia",
-    directHits: [{ moduleTitle: "Rangkuman Organic Chemistry Reaction Pathways", subject: "Chemistry", topic: "Organic Chemistry" }],
-    foundational: [
-      { moduleTitle: "Catatan Integral & Teknik Substitusi", subject: "Math AA", topic: "Calculus", reason: "laju reaksi dihitung memakai konsep turunan" },
-    ],
-    supporting: [],
-    applied: [],
-    forumHits: [{ postId: "p3", reason: "sharing forum tentang mekanisme reaksi yang sama" }],
-  },
-  {
-    query: "elastisitas",
-    directHits: [
-      { moduleTitle: "Cheat Sheet Elasticity of Demand", subject: "Economics", topic: "Microeconomics" },
-      { moduleTitle: "Slide Market Structure & Competition", subject: "Economics", topic: "Microeconomics" },
-    ],
-    foundational: [],
-    supporting: [],
-    applied: [],
-    forumHits: [],
-  },
-  {
-    query: "cas project",
-    directHits: [{ moduleTitle: "Jurnal Refleksi CAS Project: Kelas Coding untuk Anak SD", subject: "CAS", topic: "CAS Project" }],
-    foundational: [],
-    supporting: [],
-    applied: [],
-    forumHits: [{ postId: "p1", reason: "diskusi forum soal merancang kegiatan CAS Project" }],
-  },
-];
+// Contoh kata kunci yang ditampilkan sebagai saran sebelum pengguna mengetik.
+const SUGGESTED_QUERIES = ["waves", "integral", "chemical reactions", "elasticity", "cas project"];
 
-// Queries shown as tappable suggestions before the user types anything.
-const SUGGESTED_QUERIES = ["gelombang", "integral", "reaksi kimia", "elastisitas", "cas project"];
+// ---- helpers untuk pencarian semantik (server) + feed forum nyata -------------------------------------------------
 
-function findModuleByTitle(title) {
-  return MODULES.find((m) => m.title === title);
+// Mengubah timestamp ISO dari database jadi teks relatif Bahasa Indonesia,
+// sama gayanya dengan data contoh ("22 menit lalu", "4 jam lalu").
+function relativeTimeId(iso) {
+  const t = new Date(iso).getTime();
+  if (!t) return "";
+  const minutes = Math.floor(Math.max(0, Date.now() - t) / 60000);
+  if (minutes < 1) return "Baru saja";
+  if (minutes < 60) return `${minutes} menit lalu`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} jam lalu`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} hari lalu`;
+  return new Date(t).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
 }
 
-function findPostById(id) {
-  return FORUM_POSTS.find((p) => p.id === id);
-}
+// Menyusun hasil pencarian dari server (pencarian semantik atas data asli di
+// database). Duplikat dibuang. Kalau server gagal (server === null), corpus
+// lokal (modul & post asli yang sudah dimuat di browser) dicari dengan
+// pencocokan kata kunci biasa sebagai cadangan.
+function mergeSearchResults(server, corpus, query) {
+  const out = { direct: [], foundational: [], exercises: [], supporting: [], applied: [], forum: [] };
+  // Query yang ditampilkan di judul hasil: versi yang sudah dikoreksi server (kalau ada).
+  out.query = (server && server.correctedQuery) || query;
+  const seen = new Set();
+  const add = (tier, item, kind) => {
+    const key = `${kind}:${item.id || item.title || item.body}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out[tier].push(item);
+  };
 
-// ---- search roadmap (dev note, not a UI string) -------------------------------------------------
-//
-// Today this function is deliberately narrow: it looks inside MODULES and
-// FORUM_POSTS only, and only returns a hit when the query matches a
-// hand-curated SEARCH_INDEX entry or a literal substring. That's enough to
-// prove out the UI (tiers, result cards, the forum section below) but it is
-// NOT the intended end state.
-//
-// The real product goal for this search bar is a single, general-purpose,
-// intelligent search across the *entire* ecosystem — not "search modules" or
-// "search forum" as separate narrow tools bolted together. A student should
-// be able to type something like "template proposal CAS" and have it
-// understood as "find me a document of this type", then have the system
-// pull the closest matching file from wherever it actually lives (Bank
-// Modul, forum attachments, a future templates/resources area, etc.),
-// ranked by how well it fits the *kind* of thing being asked for — not just
-// literal keyword overlap with a title. Other examples this should
-// eventually handle gracefully: "contoh lab report fisika", "rubrik TOK
-// essay", "silabus lengkap Math AA", "siapa yang paling aktif di forum
-// Philosophy" — i.e. queries about document types, structure/rubrics, or
-// even people/activity, not only "topic X".
-//
-// Concretely, future work here means: a real embeddings/semantic layer
-// (not keyword/substring matching), a broader corpus (attachments, profiles,
-// activity — not just MODULES + FORUM_POSTS), query-intent detection
-// (is this person looking for a concept, a document template, a person, or
-// an activity?), and tiering/ranking driven by a trained relevance model
-// instead of the hand-authored SEARCH_INDEX above. SEARCH_INDEX and this
-// function should be treated as a placeholder shape to design the UI against,
-// not a spec to keep extending indefinitely by hand.
-function runUniversalSearch(query) {
-  const q = query.trim().toLowerCase();
-  if (!q) return null;
-
-  // 1) exact/curated match from the simulated index, if we have one
-  const curated = SEARCH_INDEX.find((entry) => entry.query.toLowerCase() === q);
-  if (curated) {
-    return {
-      direct: curated.directHits.map((h) => ({ ...findModuleByTitle(h.moduleTitle), reason: null })).filter(Boolean),
-      foundational: curated.foundational.map((h) => ({ ...findModuleByTitle(h.moduleTitle), reason: h.reason })).filter(Boolean),
-      supporting: curated.supporting.map((h) => ({ ...findModuleByTitle(h.moduleTitle), reason: h.reason })).filter(Boolean),
-      applied: curated.applied.map((h) => ({ ...findModuleByTitle(h.moduleTitle), reason: h.reason })).filter(Boolean),
-      forum: (curated.forumHits || []).map((h) => ({ ...findPostById(h.postId), reason: h.reason })).filter(Boolean),
-    };
+  if (server) {
+    ["direct", "foundational", "exercises", "supporting", "applied"].forEach((tier) => (server[tier] || []).forEach((m) => add(tier, m, "m")));
+    (server.forum || []).forEach((p) => add("forum", p, "f"));
+  } else if (corpus) {
+    const q = String(query || "").trim().toLowerCase();
+    const labelOf = (t) => (typeof t === "string" ? t : t && t.label) || "";
+    (corpus.localModules || []).forEach((m) => {
+      const hay = [m.title, m.subject, m.topic, m.description, ...(m.tags || []).map(labelOf)].join(" ").toLowerCase();
+      if (q && hay.includes(q)) add(m.isExercise ? "exercises" : "direct", { ...m, reason: null }, "m");
+    });
+    (corpus.localPosts || []).forEach((p) => {
+      const hay = [p.body, p.subject, p.topic].filter(Boolean).join(" ").toLowerCase();
+      if (q && hay.includes(q)) add("forum", { ...p, reason: null }, "f");
+    });
   }
-
-  // 2) fallback: plain substring match against title/subject/topic/tags,
-  // everything lands in "direct" since we have no real relatedness signal
-  const direct = MODULES.filter((m) => {
-    const haystack = [m.title, m.subject, m.topic, ...m.tags.map((t) => t.label)].join(" ").toLowerCase();
-    return haystack.includes(q);
-  }).map((m) => ({ ...m, reason: null }));
-
-  // Same substring fallback against forum posts — checks title, body, and
-  // subject/topic so a query can surface a relevant discussion even without
-  // a hand-curated SEARCH_INDEX entry.
-  const forum = FORUM_POSTS.filter((p) => {
-    const haystack = [p.body, p.subject, p.topic].filter(Boolean).join(" ").toLowerCase();
-    return haystack.includes(q);
-  }).map((p) => ({ ...p, reason: null }));
-
-  return { direct, foundational: [], supporting: [], applied: [], forum };
+  return out;
 }
 
-const ACTIVITY_FEED = [
-  { type: "modul", user: "senjaputih", subject: "Physics", text: "membagikan modul baru: Ringkasan Waves & Oscillation SL/HL", time: "12 menit lalu" },
-  { type: "forum", user: "bintangkecil", subject: "Math AA", text: "membuka diskusi soal pendekatan integral trigonometri di Paper 2", time: "38 menit lalu" },
-  { type: "forum", user: "kuncipas", subject: "Math AA", text: "membalas diskusi tentang integral trigonometri", time: "20 menit lalu" },
-  { type: "modul", user: "kabutmalam", subject: "Chemistry", text: "mengunggah rangkuman Organic Chemistry Reaction Pathways", time: "2 jam lalu" },
-  { type: "forum", user: "rimbakata", subject: "CAS", text: "membagikan ide riset soal akurasi rumor sebagai bagian refleksi CAS Project", time: "22 menit lalu" },
-  { type: "forum", user: "daunkering", subject: "Philosophy", text: "membalas diskusi tentang stoicism buat sehari-hari", time: "4 jam lalu" },
-];
 
 const TYPE_META = {
   modul: { label: "Modul baru", icon: "▤", color: "#2C7BE5" },
@@ -1062,7 +648,6 @@ const TYPE_META = {
 };
 
 const FILE_TYPES = ["PDF", "DOCX", "PPTX"];
-const LEVELS = ["SL", "HL", "Both"];
 
 // ---- main component -------------------------------------------------
 
@@ -1074,17 +659,27 @@ const LEVELS = ["SL", "HL", "Both"];
 // a brand new component type and remounts it, wiping input focus. Defining
 // it here instead — and passing everything it needs as props — makes its
 // identity permanently stable, so it only ever mounts once.
+// Sentinel value for the Topik <select> that means "user wants to type a
+// new topic name instead of picking from the fixed list" — kept distinct
+// from "" (which means "no topic chosen yet") so the empty/placeholder
+// option can still exist.
+const CUSTOM_TOPIC_VALUE = "__custom__";
+
 function ModuleUploadComposer({
   c, sans, inputStyle,
   moduleDraftTitle, setModuleDraftTitle,
   moduleDraftSubject, setModuleDraftSubject,
   moduleDraftTopic, setModuleDraftTopic,
-  moduleDraftLevel, setModuleDraftLevel,
+  moduleDraftTopicMode, setModuleDraftTopicMode,
+  moduleDraftCustomTopic, setModuleDraftCustomTopic,
   moduleDraftDescription, setModuleDraftDescription,
   moduleDraftTags, setModuleDraftTags,
   moduleDraftKind, setModuleDraftKind,
+  moduleDraftIsExercise, setModuleDraftIsExercise,
   moduleDraftFile, setModuleDraftFile,
   moduleDraftLinkUrl, setModuleDraftLinkUrl,
+  moduleDraftAllowAiFileRead, setModuleDraftAllowAiFileRead,
+  showAiConsentModal, setShowAiConsentModal,
   setUploadingModule, resetModuleDraft, submitModuleUpload,
 }) {
   const fileInputRef = useRef(null);
@@ -1092,27 +687,54 @@ function ModuleUploadComposer({
 
   function handleSubjectChange(newSubject) {
     setModuleDraftSubject(newSubject);
-    setModuleDraftTopic(""); // topic list changes with subject — clear the stale pick
+    // topic list changes with subject — clear the stale pick and drop back
+    // to picking from the list rather than leaving a custom topic from the
+    // previous subject silently attached to the new one.
+    setModuleDraftTopic("");
+    setModuleDraftTopicMode("select");
+    setModuleDraftCustomTopic("");
+  }
+
+  function handleTopicSelectChange(value) {
+    if (value === CUSTOM_TOPIC_VALUE) {
+      setModuleDraftTopicMode("custom");
+      setModuleDraftTopic("");
+    } else {
+      setModuleDraftTopicMode("select");
+      setModuleDraftTopic(value);
+    }
   }
 
   const safeTitle = String(moduleDraftTitle || "");
   const safeDescription = String(moduleDraftDescription || "");
   const safeLinkUrl = String(moduleDraftLinkUrl || "");
+  const safeCustomTopic = String(moduleDraftCustomTopic || "");
+  const isCustomTopic = moduleDraftTopicMode === "custom";
+  const effectiveTopic = isCustomTopic ? safeCustomTopic.trim() : moduleDraftTopic;
   const hasSource = moduleDraftKind === "link" ? safeLinkUrl.trim() : !!moduleDraftFile;
-  const canSubmit = safeTitle.trim() && moduleDraftSubject && moduleDraftTopic && moduleDraftLevel && hasSource;
+  const canSubmit = safeTitle.trim() && moduleDraftSubject && effectiveTopic && hasSource;
 
   function handleSubmit() {
     if (!canSubmit) return;
     submitModuleUpload({
       title: safeTitle.trim(),
       subject: moduleDraftSubject,
-      topic: moduleDraftTopic,
-      level: moduleDraftLevel,
+      topic: effectiveTopic,
+      // Flags a topic the user typed themselves (not picked from
+      // FOLDER_TREE) so the backend can queue it for admin review later —
+      // this never blocks or delays the upload itself, and nothing in the
+      // Bank Modul UI shows this flag to other users; it's purely for the
+      // future admin page.
+      topicIsCustom: isCustomTopic,
       description: safeDescription.trim(),
       tags: String(moduleDraftTags || ""),
       kind: moduleDraftKind,
+      isExercise: !!moduleDraftIsExercise,
       file: moduleDraftFile,
       linkUrl: safeLinkUrl.trim(),
+      // Only meaningful for file uploads — forced false for links even if
+      // somehow still true from stale state, since there's no file to read.
+      allowAiFileRead: moduleDraftKind === "file" ? !!moduleDraftAllowAiFileRead : false,
     });
     setUploadingModule(false);
     resetModuleDraft();
@@ -1133,9 +755,38 @@ function ModuleUploadComposer({
           <input
             value={moduleDraftTitle}
             onChange={(e) => setModuleDraftTitle(e.target.value)}
-            placeholder="cth. Ringkasan Waves & Oscillation SL/HL"
+            placeholder="cth. Ringkasan Waves & Oscillation"
             style={{ ...inputStyle, borderRadius: 10, padding: "10px 12px" }}
           />
+        </div>
+
+        <div>
+          <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 6 }}>Jenis konten</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {[
+              { value: false, icon: "📘", label: "Materi", hint: "ringkasan, catatan, slide, penjelasan" },
+              { value: true, icon: "✎", label: "Latihan soal (problem set)", hint: "kumpulan soal untuk dikerjakan" },
+            ].map((opt) => {
+              const active = !!moduleDraftIsExercise === opt.value;
+              return (
+                <button
+                  key={String(opt.value)}
+                  onClick={() => setModuleDraftIsExercise(opt.value)}
+                  aria-pressed={active}
+                  style={{
+                    display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, padding: "9px 14px", borderRadius: 12, cursor: "pointer", textAlign: "left",
+                    border: `1px solid ${active ? c.blue : c.line}`, background: active ? c.blueSoft : c.card,
+                  }}
+                >
+                  <span style={{ fontFamily: sans, fontSize: 12.5, fontWeight: 700, color: active ? c.blue : c.ink }}>{opt.icon} {opt.label}</span>
+                  <span style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>{opt.hint}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint, marginTop: 6, lineHeight: 1.45 }}>
+            Berlaku untuk file maupun link. AI akan memeriksa dan bisa menyesuaikan jenisnya kalau yakin salah; kamu tetap bisa mengubahnya kapan saja.
+          </div>
         </div>
 
         <div>
@@ -1165,35 +816,29 @@ function ModuleUploadComposer({
           <div>
             <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 6 }}>Topik</div>
             <select
-              value={moduleDraftTopic}
-              onChange={(e) => setModuleDraftTopic(e.target.value)}
+              value={isCustomTopic ? CUSTOM_TOPIC_VALUE : moduleDraftTopic}
+              onChange={(e) => handleTopicSelectChange(e.target.value)}
               style={{ ...inputStyle, borderRadius: 10, padding: "10px 12px", width: "100%" }}
             >
               <option value="">Pilih topik</option>
               {topicOptions.map((t) => (
                 <option key={t} value={t}>{t}</option>
               ))}
+              <option value={CUSTOM_TOPIC_VALUE}>+ Buat topik baru...</option>
             </select>
-          </div>
-        </div>
-
-        <div>
-          <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 6 }}>Level</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {LEVELS.map((l) => (
-              <button
-                key={l}
-                onClick={() => setModuleDraftLevel(l)}
-                style={{
-                  padding: "7px 16px", borderRadius: 999, cursor: "pointer", fontFamily: sans, fontSize: 12, fontWeight: 700,
-                  border: moduleDraftLevel === l ? "none" : `1px solid ${c.line}`,
-                  background: moduleDraftLevel === l ? c.blueSoft : "transparent",
-                  color: moduleDraftLevel === l ? c.blue : c.inkMuted,
-                }}
-              >
-                {l}
-              </button>
-            ))}
+            {isCustomTopic && (
+              <div style={{ marginTop: 8 }}>
+                <input
+                  value={safeCustomTopic}
+                  onChange={(e) => setModuleDraftCustomTopic(e.target.value)}
+                  placeholder="Nama topik baru"
+                  style={{ ...inputStyle, borderRadius: 10, padding: "10px 12px" }}
+                />
+                <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint, marginTop: 5, lineHeight: 1.5 }}>
+                  Topik baru akan ditinjau admin nanti — modulmu tetap langsung terupload dan bisa dilihat seperti biasa.
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1211,7 +856,8 @@ function ModuleUploadComposer({
           <div>
             <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 6 }}>URL link (Canva, Google Docs/Slides, dll)</div>
             <input
-              value={moduleDraftLinkUrl}
+              key="link-url-input"
+              value={safeLinkUrl}
               onChange={(e) => setModuleDraftLinkUrl(e.target.value)}
               placeholder="https://..."
               style={{ ...inputStyle, borderRadius: 10, padding: "10px 12px" }}
@@ -1219,8 +865,9 @@ function ModuleUploadComposer({
           </div>
         ) : (
           <div>
-            <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 6 }}>File (semua tipe file didukung — maks 25MB)</div>
+            <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 6 }}>File (semua tipe file didukung — maks 10MB)</div>
             <input
+              key="file-input"
               ref={fileInputRef}
               type="file"
               onChange={(e) => setModuleDraftFile(e.target.files && e.target.files[0])}
@@ -1238,6 +885,49 @@ function ModuleUploadComposer({
           </div>
         )}
 
+        {moduleDraftKind === "file" && (
+          <div style={{ padding: "13px 15px", borderRadius: 12, background: moduleDraftAllowAiFileRead ? c.blueSoft : c.panel, border: `1px solid ${moduleDraftAllowAiFileRead ? c.blue + "40" : c.line}` }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12, color: c.ink, marginBottom: 3 }}>
+                  {moduleDraftAllowAiFileRead ? "✓ AI boleh membaca isi file ini" : "Izinkan AI membaca isi file (opsional)"}
+                </div>
+                <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkMuted, lineHeight: 1.5 }}>
+                  {moduleDraftAllowAiFileRead
+                    ? "Isi file akan dikirim ke AI untuk klasifikasi tag yang lebih akurat."
+                    : "Secara default, AI cuma memakai judul, deskripsi, dan tag untuk menyarankan tag — bukan isi file."}
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (moduleDraftAllowAiFileRead) {
+                    // Turning it off is always instant — no consent needed to decline.
+                    setModuleDraftAllowAiFileRead(false);
+                  } else {
+                    // Turning it on always goes through the strict consent
+                    // modal first — this button never sets it to true directly.
+                    setShowAiConsentModal(true);
+                  }
+                }}
+                style={{
+                  flexShrink: 0, width: 42, height: 24, borderRadius: 999, border: "none", cursor: "pointer", position: "relative",
+                  background: moduleDraftAllowAiFileRead ? c.blue : c.line, transition: "background 0.15s",
+                }}
+                aria-label="Izinkan AI membaca isi file"
+                role="switch"
+                aria-checked={moduleDraftAllowAiFileRead}
+              >
+                <span
+                  style={{
+                    position: "absolute", top: 3, left: moduleDraftAllowAiFileRead ? 21 : 3, width: 18, height: 18, borderRadius: "50%",
+                    background: "#fff", transition: "left 0.15s", boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
+                  }}
+                />
+              </button>
+            </div>
+          </div>
+        )}
+
         <div>
           <button
             onClick={() => {
@@ -1247,6 +937,10 @@ function ModuleUploadComposer({
               } else {
                 setModuleDraftKind("link");
                 setModuleDraftFile(null);
+                // A link has no file to read — clear any prior AI file-read
+                // consent so it can't accidentally carry over if the person
+                // switches back to file mode with a different file later.
+                setModuleDraftAllowAiFileRead(false);
               }
             }}
             style={{ background: "none", border: "none", cursor: "pointer", fontFamily: sans, fontSize: 11.5, fontWeight: 700, color: c.blue, padding: 0 }}
@@ -1265,6 +959,94 @@ function ModuleUploadComposer({
         >
           {moduleDraftKind === "link" ? "Tambah link modul" : "Upload modul"}
         </button>
+      </div>
+
+      <AiFileConsentModal
+        c={c} sans={sans}
+        show={showAiConsentModal}
+        onClose={() => setShowAiConsentModal(false)}
+        onAgree={() => {
+          setModuleDraftAllowAiFileRead(true);
+          setShowAiConsentModal(false);
+        }}
+      />
+    </div>
+  );
+}
+
+// Strict consent gate for AI file-reading: the "Saya setuju" button is
+// disabled and shows a live countdown for 2 full seconds after the modal
+// opens — enforced with a real timer (not just a disabled prop set once),
+// so the only way to enable this is to actually wait. Declining is always
+// immediate. This is deliberately more friction than a typical checkbox,
+// since sending the file itself to a third-party AI provider is a bigger
+// step than just sending title/description/tags.
+// Lama tombol "Saya setuju" terkunci setelah modal persetujuan baca-file AI dibuka.
+const CONSENT_WAIT_SECONDS = 2;
+
+function AiFileConsentModal({ c, sans, show, onClose, onAgree }) {
+  const [secondsLeft, setSecondsLeft] = useState(CONSENT_WAIT_SECONDS);
+
+  useEffect(() => {
+    if (!show) return;
+    setSecondsLeft(CONSENT_WAIT_SECONDS); // reset fresh every time the modal opens
+    const interval = setInterval(() => {
+      setSecondsLeft((s) => (s > 0 ? s - 1 : 0));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [show]);
+
+  if (!show) return null;
+  const canAgree = secondsLeft === 0;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(10,16,28,0.65)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: c.card, borderRadius: 20, padding: "26px 28px", width: "min(460px, 100%)", boxShadow: "0 20px 60px rgba(0,0,0,0.35)" }}
+      >
+        <div style={{ fontSize: 26, marginBottom: 10 }}>🔒</div>
+        <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 15.5, color: c.ink, marginBottom: 10 }}>
+          Kirim isi file ke AI?
+        </div>
+        <div style={{ fontFamily: sans, fontSize: 12, color: c.inkMuted, lineHeight: 1.6, marginBottom: 12 }}>
+          Secara default, sistem cuma memakai <strong>judul, deskripsi, dan tag</strong> yang kamu ketik untuk menyarankan tag otomatis — file kamu sendiri tidak pernah dibaca.
+        </div>
+        <div style={{ fontFamily: sans, fontSize: 12, color: c.inkMuted, lineHeight: 1.6, marginBottom: 12 }}>
+          Kalau kamu setuju, <strong>isi file ini akan dikirim ke layanan AI pihak ketiga</strong> untuk dianalisis, supaya tag yang disarankan lebih akurat, dan AI juga boleh menyesuaikan judul modul kalau judul saat ini kurang mencerminkan isi filenya. Ini opsional dan bisa membantu kalau judul/deskripsi kamu singkat.
+        </div>
+        <div style={{ padding: "10px 13px", borderRadius: 10, background: c.panel, marginBottom: 18 }}>
+          <div style={{ fontFamily: sans, fontSize: 11, color: c.ink, lineHeight: 1.55 }}>
+            Beberapa hal yang perlu kamu tahu:
+          </div>
+          <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontFamily: sans, fontSize: 11, color: c.inkMuted, lineHeight: 1.6 }}>
+            <li>Cuma dipakai untuk menyarankan tag & menyesuaikan judul — bukan untuk menyalin atau mempublikasikan isi filemu.</li>
+            <li>Pilihan ini berlaku sekali untuk modul ini saja, tidak permanen untuk upload berikutnya.</li>
+            <li>Kalau judul diubah AI, kamu akan lihat notifikasinya dan tetap bisa mengeditnya kapan saja.</li>
+            <li>Kamu tetap yang menentukan tag akhir — hasil AI cuma saran.</li>
+          </ul>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button
+            onClick={onClose}
+            style={{ flex: 1, padding: "11px 0", borderRadius: 999, border: `1px solid ${c.line}`, background: "none", color: c.inkMuted, fontFamily: sans, fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}
+          >
+            Tidak, jangan kirim file
+          </button>
+          <button
+            onClick={onAgree}
+            disabled={!canAgree}
+            style={{
+              flex: 1, padding: "11px 0", borderRadius: 999, border: "none", cursor: canAgree ? "pointer" : "not-allowed",
+              background: canAgree ? c.blue : "#B9C3D2", color: "#fff", fontFamily: sans, fontWeight: 700, fontSize: 12.5,
+            }}
+          >
+            {canAgree ? "Saya setuju" : `Tunggu ${secondsLeft}s...`}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1532,7 +1314,7 @@ function ActionBar({ ctx, id, targetType, replyCountValue, onReplyClick, compact
 // ---- post card: feed-style layout (avatar left, content right) — the
 // "tweet" shape. No separate title; the body itself is the headline. ----
 function PostCard({ ctx, p, onOpen }) {
-  const { c, sans, CURRENT_USER, openProfile, avatarFor, deletePost, localReplies, countAllReplies } = ctx;
+  const { c, sans, CURRENT_USER, openProfile, avatarFor, deletePost, localReplies, countAllReplies, setEditingPostId } = ctx;
   return (
     <div
       onClick={onOpen}
@@ -1568,29 +1350,41 @@ function PostCard({ ctx, p, onOpen }) {
           >
             {p.author}
           </span>
-          <span style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint }}>· {p.time}</span>
+          <span style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint }}>· {p.time}{p.edited ? " · diedit" : ""}</span>
           <PostTypeBadge ctx={ctx} type={p.postType} />
           {p.subject && (
             <span style={{ fontFamily: sans, fontSize: 10.5, fontWeight: 700, color: c.blue, background: c.blueSoft, padding: "2.5px 9px", borderRadius: 999 }}>{p.subject}</span>
           )}
           {p.author === CURRENT_USER && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (window.confirm("Hapus post ini? Semua balasannya juga akan terhapus.")) deletePost(p.id);
-              }}
-              title="Hapus post"
-              aria-label="Hapus post"
-              style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 13, padding: "2px 4px", flexShrink: 0 }}
-            >
-              🗑️
-            </button>
+            <span style={{ marginLeft: "auto", display: "inline-flex", gap: 2, flexShrink: 0 }}>
+              <button
+                onClick={(e) => { e.stopPropagation(); setEditingPostId(p.id); onOpen(); }}
+                title="Edit post"
+                aria-label="Edit post"
+                style={{ background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 13, padding: "2px 4px" }}
+              >
+                ✏️
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (window.confirm("Hapus post ini? Semua balasannya juga akan terhapus.")) deletePost(p.id);
+                }}
+                title="Hapus post"
+                aria-label="Hapus post"
+                style={{ background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 13, padding: "2px 4px" }}
+              >
+                🗑️
+              </button>
+            </span>
           )}
         </div>
 
         <div style={{ fontFamily: sans, fontSize: 13, color: c.ink, lineHeight: 1.5, marginBottom: p.images.length || p.attachment ? 10 : 2 }}>
           {p.body}
         </div>
+
+        {p.module && <ModuleMentionChip ctx={ctx} module={p.module} />}
 
         {p.images.length > 0 && <ImageCarousel ctx={ctx} images={p.images} />}
         {p.attachment && <div style={{ marginTop: p.images.length ? 8 : 0 }}><AttachmentChip ctx={ctx} attachment={p.attachment} /></div>}
@@ -1622,7 +1416,20 @@ function PendingPostCard({ ctx, pending }) {
 }
 
 function PostList({ ctx }) {
-  const { c, sans, forumActionError, setForumActionError, setComposingPost, pendingPosts, localPosts, forumAccent, openThread } = ctx;
+  const { c, sans, forumActionError, setForumActionError, setComposingPost, pendingPosts, localPosts, forumAccent, openThread, forumTypeFilters, setForumTypeFilters, forumModuleFilterId, setForumModuleFilterId, localModules } = ctx;
+  const allPosts = localPosts;
+  const typeCounts = {};
+  for (const p of allPosts) typeCounts[p.postType] = (typeCounts[p.postType] || 0) + 1;
+  const visibleByType = forumTypeFilters.length ? allPosts.filter((p) => forumTypeFilters.includes(p.postType)) : allPosts;
+  const visiblePosts = forumModuleFilterId ? visibleByType.filter((p) => p.moduleId === forumModuleFilterId) : visibleByType;
+  const filterModule = forumModuleFilterId
+    ? localModules.find((m) => m.id === forumModuleFilterId) || (allPosts.find((p) => p.moduleId === forumModuleFilterId) || {}).module || null
+    : null;
+  const chipStyle = (active, color) => ({
+    display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 999,
+    border: `1px solid ${active ? color : c.line}`, background: active ? `${color}14` : c.card,
+    color: active ? color : c.inkMuted, fontFamily: sans, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
+  });
   return (
     <div style={{ padding: "0 32px" }}>
       {forumActionError && (
@@ -1632,7 +1439,7 @@ function PostList({ ctx }) {
         </div>
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-        <span style={{ fontFamily: sans, fontSize: 11.5, color: c.inkFaint, fontStyle: "italic" }}>data contoh · belum tersambung ke backend</span>
+        <span style={{ fontFamily: sans, fontSize: 11.5, color: c.inkFaint, fontStyle: "italic" }}>{localPosts.length} post</span>
         <button
           onClick={() => setComposingPost(true)}
           style={{
@@ -1654,27 +1461,143 @@ function PostList({ ctx }) {
         </button>
       </div>
 
+      {forumModuleFilterId && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12, padding: "9px 14px", borderRadius: 12, background: c.blueSoft, border: `1px solid ${c.blue}33` }}>
+          <span style={{ fontFamily: sans, fontSize: 12, color: c.ink }}>
+            📘 Diskusi tentang modul: <strong>{filterModule ? filterModule.title : "(modul)"}</strong>
+          </span>
+          <button onClick={() => setForumModuleFilterId(null)} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.blue, padding: 0 }}>
+            ✕ Tampilkan semua diskusi
+          </button>
+        </div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap", marginBottom: 12 }}>
+        <span style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.inkFaint, marginRight: 2 }}>Tampilkan:</span>
+        <button onClick={() => setForumTypeFilters([])} style={chipStyle(forumTypeFilters.length === 0, c.ink)}>
+          Semua <span style={{ fontWeight: 600, opacity: 0.7 }}>{allPosts.length}</span>
+        </button>
+        {Object.entries(POST_TYPES).map(([key, meta]) => {
+          const active = forumTypeFilters.includes(key);
+          return (
+            <button
+              key={key}
+              onClick={() => setForumTypeFilters((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))}
+              style={chipStyle(active, meta.color)}
+            >
+              {meta.icon} {meta.label} <span style={{ fontWeight: 600, opacity: 0.7 }}>{typeCounts[key] || 0}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {pendingPosts.map((pending) => (
           <PendingPostCard key={pending.tempId} ctx={ctx} pending={pending} />
         ))}
-        {localPosts.map((p) => (
+        {visiblePosts.map((p) => (
           <PostCard key={p.id} ctx={ctx} p={p} onOpen={() => openThread(p.id)} />
         ))}
-        {FORUM_POSTS.map((p) => (
-          <PostCard key={p.id} ctx={ctx} p={p} onOpen={() => openThread(p.id)} />
-        ))}
+        {visiblePosts.length === 0 && pendingPosts.length === 0 && (
+          <div style={{ padding: "30px 20px", textAlign: "center", borderRadius: 14, border: `1px dashed ${c.line}`, background: c.card, fontFamily: sans, fontSize: 12.5, color: c.inkMuted }}>
+            {forumModuleFilterId ? "Belum ada diskusi tentang modul ini. Jadilah yang pertama!" : forumTypeFilters.length ? "Belum ada post dengan jenis yang dipilih." : "Belum ada post di forum. Jadilah yang pertama memulai diskusi!"}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 // ---- new-post composer -------------------------------------------------
+// ---- sebutan modul di forum ----------------------------------------------------------------------
+// Chip "Membahas modul" yang tampil di post/thread; klik -> buka halaman modul di Bank Modul.
+function ModuleMentionChip({ ctx, module }) {
+  const { c, sans, openModuleFromMention } = ctx;
+  if (!module) return null;
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); openModuleFromMention(module); }}
+      title="Buka modul ini di Bank Modul"
+      style={{ display: "inline-flex", alignItems: "center", gap: 10, maxWidth: "100%", margin: "2px 0 10px", padding: "8px 12px", borderRadius: 12, border: `1px solid ${c.blue}33`, background: c.blueSoft, cursor: "pointer", textAlign: "left" }}
+    >
+      <span style={{ fontSize: 15 }}>📘</span>
+      <span style={{ minWidth: 0 }}>
+        <span style={{ display: "block", fontFamily: sans, fontSize: 9.5, fontWeight: 700, color: c.blue, textTransform: "uppercase", letterSpacing: 0.4 }}>Membahas modul</span>
+        <span style={{ display: "block", fontFamily: sans, fontSize: 12.5, fontWeight: 700, color: c.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{module.title}</span>
+        <span style={{ display: "block", fontFamily: sans, fontSize: 10.5, color: c.inkMuted }}>{module.subject} · {module.topic}</span>
+      </span>
+      <span style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.blue, flexShrink: 0 }}>Buka →</span>
+    </button>
+  );
+}
+
+// Pemilih modul untuk post baru / edit post: cari di Bank Modul lalu pilih satu.
+// `fallback` = ringkasan modul yang sudah tersimpan di post (kalau belum ada di daftar modul).
+function ModuleMentionField({ ctx, moduleId, onChange, fallback }) {
+  const { c, sans, localModules } = ctx;
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const selected = moduleId ? localModules.find((m) => m.id === moduleId) || (fallback && fallback.id === moduleId ? fallback : null) : null;
+  const q = query.trim().toLowerCase();
+  const labelOf = (t) => (typeof t === "string" ? t : t && t.label) || "";
+  const matches = localModules
+    .filter((m) => !q || [m.title, m.subject, m.topic, ...(m.tags || []).map(labelOf)].join(" ").toLowerCase().includes(q))
+    .slice(0, 8);
+  return (
+    <div onClick={(e) => e.stopPropagation()}>
+      {selected ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 999, border: `1px solid ${c.blue}33`, background: c.blueSoft, fontFamily: sans, fontSize: 11.5, color: c.ink, maxWidth: "100%" }}>
+            <span>📘</span>
+            <strong style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected.title}</strong>
+            <span style={{ color: c.inkMuted }}>{selected.subject} · {selected.topic}</span>
+          </span>
+          <button onClick={() => setOpen((v) => !v)} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.blue, padding: 0 }}>Ganti</button>
+          <button onClick={() => { onChange(null); setOpen(false); }} aria-label="Hapus sebutan modul" style={{ background: "none", border: "none", cursor: "pointer", fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.inkFaint, padding: 0 }}>✕ Hapus</button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setOpen((v) => !v)}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 13px", borderRadius: 999, border: `1px dashed ${c.line}`, background: "transparent", color: c.inkMuted, fontFamily: sans, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}
+        >
+          📘 Sebut modul dari Bank Modul <span style={{ fontWeight: 500, opacity: 0.7 }}>(opsional)</span>
+        </button>
+      )}
+      {open && (
+        <div style={{ marginTop: 8, padding: 10, borderRadius: 12, border: `1px solid ${c.line}`, background: c.card }}>
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Cari modul (judul, subject, topik)..."
+            style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", borderRadius: 9, border: `1px solid ${c.line}`, background: c.fieldBg, fontFamily: sans, fontSize: 12.5, color: c.ink, outline: "none", marginBottom: 8 }}
+          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" }}>
+            {matches.length === 0 ? (
+              <div style={{ fontFamily: sans, fontSize: 11.5, color: c.inkFaint, padding: "8px 4px" }}>Belum ada modul yang cocok.</div>
+            ) : (
+              matches.map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => { onChange(m.id); setOpen(false); setQuery(""); }}
+                  style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1, padding: "7px 10px", borderRadius: 9, border: "none", background: "transparent", cursor: "pointer", textAlign: "left" }}
+                >
+                  <span style={{ fontFamily: sans, fontSize: 12.5, fontWeight: 700, color: c.ink }}>{m.title}{m.isExercise ? "  ✎" : ""}</span>
+                  <span style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>{m.subject} · {m.topic}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NewPostComposer({ ctx }) {
   const {
     c, sans, forumAccent, CURRENT_USER, myProfile,
     draftPostType, setDraftPostType, draftBody, setDraftBody, draftImages, setDraftImages,
-    setComposingPost, submitForumPost,
+    setComposingPost, submitForumPost, draftMentionModuleId, setDraftMentionModuleId,
   } = ctx;
   return (
     <div style={{ padding: "0 32px" }}>
@@ -1719,6 +1642,10 @@ function NewPostComposer({ ctx }) {
               })}
             </div>
 
+            <div style={{ marginBottom: 12 }}>
+              <ModuleMentionField ctx={ctx} moduleId={draftMentionModuleId} onChange={setDraftMentionModuleId} />
+            </div>
+
             <textarea
               value={draftBody}
               onChange={(e) => setDraftBody(e.target.value)}
@@ -1758,7 +1685,9 @@ function NewPostComposer({ ctx }) {
                     subject: null,
                     topic: null,
                     images: draftImages,
+                    moduleId: draftMentionModuleId,
                   });
+                  setDraftMentionModuleId(null);
                   setDraftBody("");
                   setDraftImages([]);
                   setDraftPostType("diskusi");
@@ -1882,7 +1811,7 @@ function PendingReplyCard({ ctx, pending }) {
 // a connecting line, Threads-style. Depth is visually capped (indent
 // stops growing past a point) so very deep chains stay readable. ----
 function ReplyNode({ ctx, reply, allReplies, depth, postId }) {
-  const { c, sans, CURRENT_USER, openProfile, avatarFor, deleteReply, replyTarget, setReplyTarget, setReplyDraft } = ctx;
+  const { c, sans, CURRENT_USER, openProfile, avatarFor, deleteReply, replyTarget, setReplyTarget, setReplyDraft, editingReplyId, setEditingReplyId, savingEdit, saveForumReplyEdit } = ctx;
   const children = allReplies.filter((r) => r.parentId === reply.id);
   const isReplyingHere = replyTarget === reply.id;
   const indent = Math.min(depth, 4) * 22;
@@ -1902,21 +1831,37 @@ function ReplyNode({ ctx, reply, allReplies, depth, postId }) {
               <span onClick={() => openProfile(reply.author)} style={{ fontFamily: sans, fontWeight: 700, fontSize: 12, color: c.ink, cursor: "pointer" }}>
                 {reply.author}
               </span>
-              <span style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>· {reply.time}</span>
+              <span style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>· {reply.time}{reply.edited ? " · diedit" : ""}</span>
               {reply.author === CURRENT_USER && (
-                <button
-                  onClick={() => {
-                    if (window.confirm("Hapus balasan ini? Balasan di bawahnya (jika ada) juga akan terhapus.")) deleteReply(postId, reply.id);
-                  }}
-                  title="Hapus balasan"
-                  aria-label="Hapus balasan"
-                  style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 12, padding: "2px 4px", flexShrink: 0 }}
-                >
-                  🗑️
-                </button>
+                <span style={{ marginLeft: "auto", display: "inline-flex", gap: 2, flexShrink: 0 }}>
+                  <button
+                    onClick={() => setEditingReplyId(editingReplyId === reply.id ? null : reply.id)}
+                    title="Edit balasan"
+                    aria-label="Edit balasan"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 12, padding: "2px 4px" }}
+                  >
+                    ✏️
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm("Hapus balasan ini? Balasan di bawahnya (jika ada) juga akan terhapus.")) deleteReply(postId, reply.id);
+                    }}
+                    title="Hapus balasan"
+                    aria-label="Hapus balasan"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 12, padding: "2px 4px" }}
+                  >
+                    🗑️
+                  </button>
+                </span>
               )}
             </div>
-            <p style={{ fontFamily: sans, fontSize: 12.5, color: c.ink, lineHeight: 1.55, margin: "0 0 6px" }}>{reply.body}</p>
+            {editingReplyId === reply.id ? (
+              <div style={{ marginBottom: 6 }}>
+                <InlineTextEditor ctx={ctx} initial={reply.body} multiline maxLength={3000} saving={savingEdit} placeholder="Isi balasan" onSave={(t) => saveForumReplyEdit(reply.id, t)} onCancel={() => setEditingReplyId(null)} />
+              </div>
+            ) : (
+              <p style={{ fontFamily: sans, fontSize: 12.5, color: c.ink, lineHeight: 1.55, margin: "0 0 6px" }}>{reply.body}</p>
+            )}
             {reply.images && reply.images.length > 0 && <div style={{ marginBottom: 6 }}><ImageCarousel ctx={ctx} images={reply.images} rounded={12} /></div>}
             {reply.attachment && <div style={{ marginBottom: 6 }}><AttachmentChip ctx={ctx} attachment={reply.attachment} /></div>}
             <ActionBar
@@ -1946,7 +1891,7 @@ function ReplyNode({ ctx, reply, allReplies, depth, postId }) {
 
 // ---- thread detail: post + nested replies -------------------------------------------------
 function ThreadDetail({ ctx, post }) {
-  const { c, sans, CURRENT_USER, openProfile, avatarFor, deletePost, localReplies, pendingReplies, countAllReplies, closeThread, setReplyTarget, setReplyDraft, forumActionError, setForumActionError } = ctx;
+  const { c, sans, CURRENT_USER, openProfile, avatarFor, deletePost, localReplies, pendingReplies, countAllReplies, closeThread, setReplyTarget, setReplyDraft, forumActionError, setForumActionError, editingPostId, setEditingPostId, savingEdit, saveForumPostEdit } = ctx;
   const allReplies = [...post.replies, ...(localReplies[post.id] || [])];
   const topLevelReplies = allReplies.filter((r) => r.parentId === null);
   const total = countAllReplies(allReplies);
@@ -1976,18 +1921,28 @@ function ThreadDetail({ ctx, post }) {
               <span onClick={() => openProfile(post.author)} style={{ fontFamily: sans, fontWeight: 700, fontSize: 13, color: c.ink, cursor: "pointer" }}>
                 {post.author}
               </span>
-              <span style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint }}>· {post.time}</span>
+              <span style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint }}>· {post.time}{post.edited ? " · diedit" : ""}</span>
               {post.author === CURRENT_USER && (
-                <button
-                  onClick={() => {
-                    if (window.confirm("Hapus post ini? Semua balasannya juga akan terhapus.")) deletePost(post.id);
-                  }}
-                  title="Hapus post"
-                  aria-label="Hapus post"
-                  style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 13, padding: "2px 4px", flexShrink: 0 }}
-                >
-                  🗑️
-                </button>
+                <span style={{ marginLeft: "auto", display: "inline-flex", gap: 2, flexShrink: 0 }}>
+                  <button
+                    onClick={() => setEditingPostId(editingPostId === post.id ? null : post.id)}
+                    title="Edit post"
+                    aria-label="Edit post"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 13, padding: "2px 4px" }}
+                  >
+                    ✏️
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm("Hapus post ini? Semua balasannya juga akan terhapus.")) deletePost(post.id);
+                    }}
+                    title="Hapus post"
+                    aria-label="Hapus post"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 13, padding: "2px 4px" }}
+                  >
+                    🗑️
+                  </button>
+                </span>
               )}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
@@ -1997,7 +1952,14 @@ function ThreadDetail({ ctx, post }) {
               )}
               {post.topic && <span style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>{post.topic}</span>}
             </div>
-            <p style={{ fontFamily: sans, fontSize: 14, color: c.ink, lineHeight: 1.6, margin: "0 0 10px" }}>{post.body}</p>
+            {editingPostId === post.id ? (
+              <div style={{ marginBottom: 10 }}>
+                <PostEditor ctx={ctx} post={post} saving={savingEdit} onSave={(draft) => saveForumPostEdit(post.id, draft)} onCancel={() => setEditingPostId(null)} />
+              </div>
+            ) : (
+              <p style={{ fontFamily: sans, fontSize: 14, color: c.ink, lineHeight: 1.6, margin: "0 0 10px" }}>{post.body}</p>
+            )}
+            {editingPostId !== post.id && post.module && <ModuleMentionChip ctx={ctx} module={post.module} />}
             {post.images.length > 0 && <div style={{ marginBottom: 10 }}><ImageCarousel ctx={ctx} images={post.images} /></div>}
             {post.attachment && <div style={{ marginBottom: 10 }}><AttachmentChip ctx={ctx} attachment={post.attachment} /></div>}
             <ActionBar ctx={ctx} id={post.id} targetType="post" replyCountValue={total} onReplyClick={() => { setReplyTarget(null); setReplyDraft(""); }} />
@@ -2044,13 +2006,21 @@ export default function Homepage({ currentUsername, onLogout }) {
   const CURRENT_USER = currentUsername || "kuncipas";
 
   const [activeNav, setActiveNav] = useState("home");
+  // FYI banner on the homepage about AI usage ethics — shown by default,
+  // stays dismissed for the rest of the session once closed (not tied to
+  // activeNav, so navigating away and back doesn't bring it back).
+  const [showAiEthicsBanner, setShowAiEthicsBanner] = useState(true);
   const [search, setSearch] = useState("");
 
   // Homepage universal search — separate from the Bank Modul in-folder search
   // above. This is the "type a concept, get direct + related results" hub.
   const [heroQuery, setHeroQuery] = useState("");
   const [heroSubmitted, setHeroSubmitted] = useState("");
-  const heroResults = useMemo(() => runUniversalSearch(heroSubmitted), [heroSubmitted]);
+  // Hasil pencarian sekarang datang dari server (async), jadi berupa state, bukan useMemo.
+  // Effect yang mengisinya ada di bawah, setelah state modul/forum dideklarasikan.
+  const [heroResults, setHeroResults] = useState(null);
+  const [heroSearching, setHeroSearching] = useState(false);
+  const [heroSearchNote, setHeroSearchNote] = useState("");
 
   function submitHeroSearch(q) {
     setHeroQuery(q);
@@ -2090,7 +2060,7 @@ export default function Homepage({ currentUsername, onLogout }) {
   // function is called from the composer, but it's DEFINED here at the
   // Homepage level, so the fetch and its eventual setState both survive
   // the person navigating to a different menu mid-upload.
-  async function submitForumPost({ postType, body, subject, topic, images }) {
+  async function submitForumPost({ postType, body, subject, topic, images, moduleId }) {
     const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setPendingPosts((prev) => [...prev, { tempId, body, error: null }]);
 
@@ -2103,23 +2073,25 @@ export default function Homepage({ currentUsername, onLogout }) {
         return;
       }
 
-      const formData = new FormData();
-      formData.append("body", body);
-      formData.append("postType", postType);
-      if (subject) formData.append("subject", subject);
-      if (topic) formData.append("topic", topic);
-      // images are data URLs at this point (local previews) — convert each
-      // back to a Blob so it can travel as a real file in the multipart
-      // request, same as a freshly-picked <input type="file"> would.
+      // Gambar (data URL pratinjau lokal) diunggah LANGSUNG ke Cloudinary; ke server
+      // hanya dikirim JSON kecil berisi public_id-nya.
+      const uploadedImages = [];
       for (const dataUrl of images) {
         const blob = await (await fetch(dataUrl)).blob();
-        formData.append("images", blob, "image.jpg");
+        uploadedImages.push(await uploadDirectToCloudinary(blob, "forum", session.access_token));
       }
 
       const res = await fetch("/api/forum/posts", {
         method: "POST",
-        headers: { Authorization: `Bearer ${session.access_token}` },
-        body: formData,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          body,
+          postType,
+          subject: subject || null,
+          topic: topic || null,
+          moduleId: moduleId || null,
+          images: uploadedImages.map((u) => ({ publicId: u.publicId })),
+        }),
       });
       const result = await res.json();
 
@@ -2145,13 +2117,15 @@ export default function Homepage({ currentUsername, onLogout }) {
         likes: 0,
         likedByMe: false,
         bookmarkedByMe: false,
+        moduleId: result.module ? result.module.id : null,
+        module: result.module || null,
         replies: [],
       };
       setLocalPosts((prev) => [newPost, ...prev]);
       setLikeCounts((prev) => ({ ...prev, [newPost.id]: 0 }));
       setPendingPosts((prev) => prev.filter((p) => p.tempId !== tempId));
     } catch (err) {
-      setPendingPosts((prev) => prev.map((p) => (p.tempId === tempId ? { ...p, error: "Gagal mengirim post — coba lagi." } : p)));
+      setPendingPosts((prev) => prev.map((p) => (p.tempId === tempId ? { ...p, error: err.uploadMessage || "Gagal mengirim post — coba lagi." } : p)));
     }
   }
 
@@ -2176,19 +2150,21 @@ export default function Homepage({ currentUsername, onLogout }) {
         return;
       }
 
-      const formData = new FormData();
-      formData.append("postId", postId);
-      if (parentId) formData.append("parentId", parentId);
-      formData.append("body", body);
+      const uploadedImages = [];
       for (const dataUrl of images) {
         const blob = await (await fetch(dataUrl)).blob();
-        formData.append("images", blob, "image.jpg");
+        uploadedImages.push(await uploadDirectToCloudinary(blob, "forum", session.access_token));
       }
 
       const res = await fetch("/api/forum/replies", {
         method: "POST",
-        headers: { Authorization: `Bearer ${session.access_token}` },
-        body: formData,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          postId,
+          parentId: parentId || null,
+          body,
+          images: uploadedImages.map((u) => ({ publicId: u.publicId })),
+        }),
       });
       const result = await res.json();
 
@@ -2215,7 +2191,7 @@ export default function Homepage({ currentUsername, onLogout }) {
       setLikeCounts((prev) => ({ ...prev, [newReply.id]: 0 }));
       setPendingReplies((prev) => prev.filter((r) => r.tempId !== tempId));
     } catch (err) {
-      setPendingReplies((prev) => prev.map((r) => (r.tempId === tempId ? { ...r, error: "Gagal mengirim balasan — coba lagi." } : r)));
+      setPendingReplies((prev) => prev.map((r) => (r.tempId === tempId ? { ...r, error: err.uploadMessage || "Gagal mengirim balasan — coba lagi." } : r)));
     }
   }
 
@@ -2308,8 +2284,13 @@ export default function Homepage({ currentUsername, onLogout }) {
 
   // Converts a row from the /api/modules GET response into the shape the
   // existing module-card UI already expects (title/subject/topic/uploader/
-  // type/level/size/date/tags) — this is the one place that shape lives,
-  // so the rest of the app never needs to know about the raw DB columns.
+  // type/size/date/tags) — this is the one place that shape lives, so the
+  // rest of the app never needs to know about the raw DB columns.
+  //
+  // topicIsCustom carries through from the DB (set at upload time when the
+  // uploader typed a new topic instead of picking one from FOLDER_TREE) so
+  // the future admin page can find and review it — nothing in this
+  // uploader-facing UI reads or displays this flag.
   function moduleFromApiRow(row) {
     const isLink = !!row.link_url;
     const sizeKb = (row.file_size_bytes || 0) / 1024;
@@ -2317,17 +2298,20 @@ export default function Homepage({ currentUsername, onLogout }) {
     return {
       id: row.id,
       title: row.title,
+      originalTitle: row.original_title || null,
       subject: row.subject,
       topic: row.topic,
+      topicIsCustom: !!row.topic_is_custom,
       uploader: row.uploader,
       type: isLink ? "LINK" : row.file_type,
-      level: row.level,
       description: row.description || "",
       size,
-      date: "Baru saja",
+      date: row.created_at ? relativeTimeId(row.created_at) : "Baru saja",
       fileUrl: row.file_url,
       linkUrl: row.link_url,
       tags: row.tags || [],
+      isExercise: !!row.is_exercise,
+      exerciseSetBy: row.exercise_set_by || "user",
     };
   }
 
@@ -2353,7 +2337,11 @@ export default function Homepage({ currentUsername, onLogout }) {
     fetchModules();
   }, []);
 
-  async function submitModuleUpload({ title, subject, topic, level, description, tags, kind, file, linkUrl }) {
+  async function submitModuleUpload({ title, subject, topic, topicIsCustom, description, tags, kind, isExercise, file, linkUrl, allowAiFileRead }) {
+    // Samakan penulisan topik dengan folder yang sudah ada (tanpa peduli huruf besar/kecil)
+    const canon = canonicalTopic(subject, topic, localModules);
+    topic = canon.topic;
+    topicIsCustom = canon.isCustom;
     const tempId = `pending-module-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setPendingModuleUploads((prev) => [...prev, { tempId, title, error: null }]);
 
@@ -2366,24 +2354,35 @@ export default function Homepage({ currentUsername, onLogout }) {
         return;
       }
 
-      const formData = new FormData();
-      formData.append("title", title);
-      formData.append("subject", subject);
-      formData.append("topic", topic);
-      formData.append("level", level);
-      formData.append("description", description || "");
-      formData.append("tags", tags);
-      formData.append("kind", kind);
+      // File diunggah LANGSUNG ke Cloudinary (anti batas 4,5 MB Vercel); ke server
+      // hanya dikirim JSON kecil berisi metadata + public_id hasil upload.
+      // topicIsCustom: memungkinkan backend menandai topik baru untuk review admin
+      // tanpa memengaruhi upload — modul tetap tersimpan dan tampil langsung.
+      const payload = {
+        title,
+        subject,
+        topic,
+        topicIsCustom: !!topicIsCustom,
+        description: description || "",
+        tags,
+        kind,
+        isExercise: !!isExercise,
+      };
       if (kind === "link") {
-        formData.append("linkUrl", linkUrl);
+        payload.linkUrl = linkUrl;
       } else {
-        formData.append("file", file);
+        const uploaded = await uploadDirectToCloudinary(file, "module", session.access_token);
+        payload.upload = { publicId: uploaded.publicId, resourceType: uploaded.resourceType, filename: file.name };
+        // Pengaman kedua (yang pertama ada di handleSubmit ModuleUploadComposer):
+        // link tidak pernah dianalisis isi filenya, hanya upload file yang bisa
+        // ikut, dan hanya kalau izinnya memang diberikan.
+        payload.allowAiFileRead = !!allowAiFileRead;
       }
 
       const res = await fetch("/api/modules", {
         method: "POST",
-        headers: { Authorization: `Bearer ${session.access_token}` },
-        body: formData,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify(payload),
       });
       const result = await res.json();
 
@@ -2392,16 +2391,270 @@ export default function Homepage({ currentUsername, onLogout }) {
         return;
       }
 
-      setLocalModules((prev) => [moduleFromApiRow({ ...result.module, uploader: CURRENT_USER }), ...prev]);
+      const newModule = moduleFromApiRow({ ...result.module, uploader: CURRENT_USER });
+      setLocalModules((prev) => [newModule, ...prev]);
       setPendingModuleUploads((prev) => prev.filter((m) => m.tempId !== tempId));
+
+      // Fire-and-forget: suggest AI tags (and, when file-read was
+      // consented to, a possible title adjustment) in the background. This
+      // never blocks the upload flow and doesn't require any confirmation
+      // step during upload — per the explicit design decision, ML tagging
+      // happens invisibly and any title change surfaces as a dismissible
+      // notification once it's done, not a modal that interrupts anything.
+      fetch(`/api/modules/${newModule.id}/suggest-tags`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      })
+        .then((res) => res.json())
+        .then((tagResult) => {
+          if (tagResult?.tags) {
+            setLocalModules((prev) =>
+              prev.map((m) =>
+                m.id === newModule.id
+                  ? { ...m, tags: tagResult.tags, ...(tagResult.titleChanged ? { title: tagResult.newTitle, originalTitle: m.title } : {}), ...(tagResult.exerciseChanged ? { isExercise: tagResult.isExercise, exerciseSetBy: "ai" } : {}) }
+                  : m
+              )
+            );
+          }
+          if (tagResult?.exerciseChanged) {
+            setTypeChangeNotifications((prev) => [
+              ...prev,
+              { id: `${newModule.id}-type-${Date.now()}`, moduleId: newModule.id, title: tagResult.newTitle || title, isExercise: tagResult.isExercise },
+            ]);
+          }
+          if (tagResult?.titleChanged) {
+            setTitleChangeNotifications((prev) => [
+              ...prev,
+              { id: `${newModule.id}-${Date.now()}`, moduleId: newModule.id, oldTitle: title, newTitle: tagResult.newTitle },
+            ]);
+          }
+        })
+        .catch((err) => console.error("Gagal memuat saran tag AI:", err));
     } catch (err) {
-      setPendingModuleUploads((prev) => prev.map((m) => (m.tempId === tempId ? { ...m, error: "Gagal mengupload modul — coba lagi." } : m)));
+      setPendingModuleUploads((prev) => prev.map((m) => (m.tempId === tempId ? { ...m, error: err.uploadMessage || "Gagal mengupload modul — coba lagi." } : m)));
     }
   }
 
   const [moduleActionError, setModuleActionError] = useState("");
   const [deletingModuleId, setDeletingModuleId] = useState(null);
+  // Queue of "AI adjusted your title" notifications — a plain array rather
+  // than a single value since multiple uploads' background tagging could
+  // finish around the same time. Each entry carries enough info (module id,
+  // old/new title) for the notification UI to link back to the module and
+  // be dismissed individually.
+  const [titleChangeNotifications, setTitleChangeNotifications] = useState([]);
   const [previewModule, setPreviewModule] = useState(null); // the module object currently shown in the preview modal, or null
+
+  // ---- Edit konten sendiri (judul modul, post, balasan) ------------------
+  // Hanya satu hal yang diedit pada satu waktu per jenis. Editor-nya (komponen
+  // InlineTextEditor / PostEditor) menyimpan teks yang sedang diketik di state
+  // lokalnya sendiri; di sini hanya id yang sedang diedit + fungsi simpan.
+  const [editingModuleId, setEditingModuleId] = useState(null);
+  const [editingPostId, setEditingPostId] = useState(null);
+  const [editingReplyId, setEditingReplyId] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [forumTypeFilters, setForumTypeFilters] = useState([]);
+
+  async function getAccessToken() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session ? session.access_token : null;
+  }
+
+  // Mengedit judul modul (atau mengembalikannya ke judul asli sebelum diubah AI).
+  async function saveModuleTitle(moduleId, nextTitle) {
+    const title = String(nextTitle || "").trim();
+    if (!title) {
+      setModuleActionError("Judul tidak boleh kosong.");
+      return;
+    }
+    setModuleActionError("");
+    const token = await getAccessToken();
+    if (!token) {
+      setModuleActionError("Sesi login sudah habis — coba login ulang.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res = await fetch(`/api/modules/${moduleId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ title }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setModuleActionError(result.error || "Gagal menyimpan judul.");
+        return;
+      }
+      setLocalModules((prev) =>
+        prev.map((m) => (m.id === moduleId ? { ...m, title: result.module.title, originalTitle: result.module.originalTitle } : m))
+      );
+      setTitleChangeNotifications((prev) => prev.filter((n) => n.moduleId !== moduleId));
+      setEditingModuleId(null);
+    } catch (err) {
+      setModuleActionError("Gagal menyimpan judul — coba lagi.");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function saveForumPostEdit(postId, { body, postType, moduleId }) {
+    const text = String(body || "").trim();
+    if (!text) {
+      setForumActionError("Isi post tidak boleh kosong.");
+      return;
+    }
+    setForumActionError("");
+    const token = await getAccessToken();
+    if (!token) {
+      setForumActionError("Sesi login sudah habis — coba login ulang.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res = await fetch(`/api/forum/posts/${postId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ body: text, postType, ...(moduleId !== undefined ? { moduleId } : {}) }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setForumActionError(result.error || "Gagal menyimpan perubahan post.");
+        return;
+      }
+      setLocalPosts((prev) =>
+        prev.map((p) => (p.id === postId ? { ...p, body: result.post.body, postType: result.post.postType, edited: true, ...(result.post.moduleId !== undefined ? { moduleId: result.post.moduleId, module: result.post.module } : {}) } : p))
+      );
+      setEditingPostId(null);
+    } catch (err) {
+      setForumActionError("Gagal menyimpan perubahan post — coba lagi.");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function saveForumReplyEdit(replyId, body) {
+    const text = String(body || "").trim();
+    if (!text) {
+      setForumActionError("Isi balasan tidak boleh kosong.");
+      return;
+    }
+    setForumActionError("");
+    const token = await getAccessToken();
+    if (!token) {
+      setForumActionError("Sesi login sudah habis — coba login ulang.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res = await fetch(`/api/forum/replies/${replyId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ body: text }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setForumActionError(result.error || "Gagal menyimpan perubahan balasan.");
+        return;
+      }
+      setLocalReplies((prev) => {
+        const next = {};
+        for (const key of Object.keys(prev)) {
+          next[key] = prev[key].map((r) => (r.id === replyId ? { ...r, body: result.reply.body, edited: true } : r));
+        }
+        return next;
+      });
+      setEditingReplyId(null);
+    } catch (err) {
+      setForumActionError("Gagal menyimpan perubahan balasan — coba lagi.");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  // ---- Jenis modul (materi / latihan soal) + sebut modul di forum -------------
+  const [moduleKindFilter, setModuleKindFilter] = useState("all"); // "all" | "material" | "exercise"
+  const [typeChangeNotifications, setTypeChangeNotifications] = useState([]);
+  const [draftMentionModuleId, setDraftMentionModuleId] = useState(null); // modul yang akan disebut di post baru
+  const [forumModuleFilterId, setForumModuleFilterId] = useState(null); // tampilkan hanya diskusi tentang modul ini
+  const [highlightedModuleId, setHighlightedModuleId] = useState(null); // kartu modul yang disorot sebentar
+
+  // Mengubah jenis modul sendiri (materi <-> latihan soal). Pilihan pemilik
+  // tidak akan ditimpa AI lagi.
+  async function saveModuleType(moduleId, nextIsExercise) {
+    setModuleActionError("");
+    const token = await getAccessToken();
+    if (!token) {
+      setModuleActionError("Sesi login sudah habis — coba login ulang.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res = await fetch(`/api/modules/${moduleId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ isExercise: !!nextIsExercise }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setModuleActionError(result.error || "Gagal mengubah jenis modul.");
+        return;
+      }
+      setLocalModules((prev) =>
+        prev.map((m) => (m.id === moduleId ? { ...m, isExercise: !!result.module.isExercise, exerciseSetBy: result.module.exerciseSetBy || "user_edit" } : m))
+      );
+      setTypeChangeNotifications((prev) => prev.filter((n) => n.moduleId !== moduleId));
+    } catch (err) {
+      setModuleActionError("Gagal mengubah jenis modul — coba lagi.");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  // Dari sebutan modul di forum -> halaman modul di Bank Modul: membuka folder
+  // subject/topik modul itu dan menyorot kartunya.
+  function openModuleFromMention(mod) {
+    if (!mod) return;
+    setUploadingModule(false);
+    setSearch("");
+    setModuleKindFilter("all");
+    setFilterTypes([]);
+    setOpenSubject(mod.subject);
+    setOpenTopic(mod.topic);
+    setActiveNav("modules");
+    setHighlightedModuleId(mod.id);
+  }
+
+  // Dari kartu modul -> mulai diskusi tentang modul itu (modul otomatis disebut).
+  function startDiscussionAboutModule(m) {
+    setDraftMentionModuleId(m.id);
+    setDraftPostType("diskusi");
+    closeThread();
+    setActiveNav("forum");
+    setComposingPost(true);
+  }
+
+  // Dari kartu modul -> lihat semua diskusi yang menyebut modul itu.
+  function openDiscussionsForModule(m) {
+    setForumModuleFilterId(m.id);
+    setComposingPost(false);
+    closeThread();
+    setActiveNav("forum");
+  }
+
+  useEffect(() => {
+    if (!highlightedModuleId) return undefined;
+    const t1 = setTimeout(() => {
+      const el = document.getElementById(`module-card-${highlightedModuleId}`);
+      if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 150);
+    const t2 = setTimeout(() => setHighlightedModuleId(null), 4000);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [highlightedModuleId]);
 
   async function deleteModule(moduleId) {
     setModuleActionError("");
@@ -2432,28 +2685,9 @@ export default function Homepage({ currentUsername, onLogout }) {
     }
   }
 
-  const [likedIds, setLikedIds] = useState(() => {
-    const initial = {};
-    FORUM_POSTS.forEach((p) => {
-      if (p.likedByMe) initial[p.id] = true;
-      const walk = (replies) => replies.forEach((r) => { if (r.likedByMe) initial[r.id] = true; });
-      walk(p.replies);
-    });
-    return initial;
-  });
-  const [likeCounts, setLikeCounts] = useState(() => {
-    const initial = {};
-    FORUM_POSTS.forEach((p) => {
-      initial[p.id] = p.likes;
-      p.replies.forEach((r) => { initial[r.id] = r.likes; });
-    });
-    return initial;
-  });
-  const [bookmarkedIds, setBookmarkedIds] = useState(() => {
-    const initial = {};
-    FORUM_POSTS.forEach((p) => { if (p.bookmarkedByMe) initial[p.id] = true; });
-    return initial;
-  });
+  const [likedIds, setLikedIds] = useState({});
+  const [likeCounts, setLikeCounts] = useState({});
+  const [bookmarkedIds, setBookmarkedIds] = useState({});
 
   // Restores real bookmark state from Supabase on load — bookmarks are
   // always per-user server data (see the bookmarks table's RLS: a person
@@ -2481,6 +2715,171 @@ export default function Homepage({ currentUsername, onLogout }) {
       }
     })();
   }, []);
+
+  // ---- Feed forum nyata dari database ------------------------------------
+  // Sebelumnya post asli hanya ada selama sesi (localPosts) dan hilang
+  // setelah refresh. Sekarang dimuat dari GET /api/forum/posts: post masuk
+  // ke localPosts, balasannya ke localReplies (dikelompokkan per post),
+  // dan jumlah like + status "sudah saya like" ke likeCounts / likedIds.
+  // Dipanggil sekali saat pertama dimuat, dan lagi kalau hasil pencarian
+  // menunjuk post yang belum ada di browser (mis. dibuat orang lain).
+  async function fetchForumFeed() {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return;
+      const res = await fetch("/api/forum/posts", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const result = await res.json();
+      if (!res.ok || !result.posts) return;
+
+      const repliesByPost = {};
+      const counts = {};
+      const liked = {};
+      for (const r of result.replies || []) {
+        (repliesByPost[r.postId] ||= []).push({
+          id: r.id,
+          parentId: r.parentId,
+          author: r.author,
+          body: r.body,
+          time: relativeTimeId(r.createdAt),
+          attachment: r.attachmentName ? { name: r.attachmentName, size: "" } : null,
+          images: r.images || [],
+          likes: r.likes,
+          likedByMe: r.likedByMe,
+          edited: !!r.editedAt,
+        });
+        counts[r.id] = r.likes;
+        liked[r.id] = !!r.likedByMe;
+      }
+      const posts = result.posts.map((p) => {
+        counts[p.id] = p.likes;
+        liked[p.id] = !!p.likedByMe;
+        return {
+          id: p.id,
+          postType: p.postType,
+          body: p.body,
+          subject: p.subject,
+          topic: p.topic,
+          author: p.author,
+          time: relativeTimeId(p.createdAt),
+          attachment: p.attachmentName ? { name: p.attachmentName, size: "" } : null,
+          images: p.images || [],
+          likes: p.likes,
+          likedByMe: p.likedByMe,
+          edited: !!p.editedAt,
+          moduleId: p.moduleId || null,
+          module: p.module || null,
+          bookmarkedByMe: false,
+          replies: [],
+        };
+      });
+
+      setLocalPosts(posts);
+      setLocalReplies(repliesByPost);
+      setLikeCounts((prev) => ({ ...prev, ...counts }));
+      setLikedIds((prev) => ({ ...prev, ...liked }));
+    } catch (err) {
+      console.error("Gagal memuat feed forum:", err);
+    }
+  }
+
+  useEffect(() => {
+    fetchForumFeed();
+  }, []);
+
+  // Klik hasil pencarian forum: kalau post-nya belum ada di browser,
+  // muat ulang feed dulu supaya thread-nya benar-benar bisa dibuka.
+  async function openThreadFromSearch(id) {
+    const known = localPosts.some((p) => p.id === id);
+    if (!known) await fetchForumFeed();
+    openThread(id);
+  }
+
+  // ---- Pencarian semantik ---------------------------------------------
+  // Alur: query dikirim ke POST /api/search (embedding + pgvector). Kalau
+  // server gagal, jatuh ke pencocokan kata kunci biasa atas modul & post yang
+  // sudah dimuat, plus catatan kecil di UI.
+  const searchCorpusRef = useRef({ localModules: [], localPosts: [] });
+  searchCorpusRef.current = { localModules, localPosts };
+
+  useEffect(() => {
+    const q = heroSubmitted.trim();
+    if (!q) {
+      setHeroResults(null);
+      setHeroSearching(false);
+      setHeroSearchNote("");
+      return;
+    }
+    let cancelled = false;
+    setHeroResults(null);
+    setHeroSearching(true);
+    setHeroSearchNote("");
+    (async () => {
+      let server = null;
+      let note = "";
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session) throw new Error("Sesi login sudah habis");
+        const res = await fetch("/api/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+          body: JSON.stringify({ query: q }),
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error || "Pencarian gagal");
+        server = result;
+        if (result.correctedQuery) {
+          note = `Showing results for “${result.correctedQuery}” (corrected from “${q}”).`;
+        }
+      } catch (err) {
+        console.error("Pencarian semantik gagal, memakai pencocokan kata kunci:", err);
+        note = "Semantic search is unavailable right now — showing plain keyword matches.";
+      }
+      if (cancelled) return;
+      setHeroResults(mergeSearchResults(server, server ? null : searchCorpusRef.current, q));
+      setHeroSearchNote(note);
+      setHeroSearching(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [heroSubmitted]);
+
+  // ---- Aktivitas terbaru (dari database) --------------------------------
+  const [activityItems, setActivityItems] = useState(null); // null = belum/gagal dimuat
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState("");
+
+  async function fetchActivity() {
+    setActivityLoading(true);
+    setActivityError("");
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) throw new Error("Sesi login sudah habis — coba login ulang.");
+      const res = await fetch("/api/activity", { headers: { Authorization: `Bearer ${session.access_token}` } });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Gagal memuat aktivitas.");
+      setActivityItems(result.items || []);
+    } catch (err) {
+      console.error("Gagal memuat aktivitas:", err);
+      setActivityError(err.message || "Gagal memuat aktivitas.");
+    } finally {
+      setActivityLoading(false);
+    }
+  }
+
+  // Dimuat ulang setiap kali menu Aktivitas Terbaru dibuka.
+  useEffect(() => {
+    if (activeNav === "activity") fetchActivity();
+  }, [activeNav]);
 
   // Optimistic like/unlike: flip the UI immediately (so it feels instant on
   // click), fire the request in the background, and reconcile — on success
@@ -2518,7 +2917,7 @@ export default function Homepage({ currentUsername, onLogout }) {
         // actually inserted into the database, so liking them fails on the
         // foreign key constraint — surfaced here rather than reverting
         // silently, same reasoning as the reply-to-demo-post error.
-        setForumActionError("Ini konten contoh dan belum ada di database sungguhan, jadi like tidak bisa disimpan.");
+        setForumActionError("Gagal menyimpan like — coba lagi.");
       }
     } catch (err) {
       setLikedIds((prev) => ({ ...prev, [id]: wasLiked }));
@@ -2544,7 +2943,7 @@ export default function Homepage({ currentUsername, onLogout }) {
       });
       if (!res.ok) {
         setBookmarkedIds((prev) => ({ ...prev, [id]: wasBookmarked }));
-        setForumActionError("Ini konten contoh dan belum ada di database sungguhan, jadi bookmark tidak bisa disimpan.");
+        setForumActionError("Gagal menyimpan bookmark — coba lagi.");
       }
     } catch (err) {
       setBookmarkedIds((prev) => ({ ...prev, [id]: wasBookmarked }));
@@ -2579,7 +2978,7 @@ export default function Homepage({ currentUsername, onLogout }) {
   // else's. `profileDraft` holds in-progress edits before they're saved.
   const [viewedProfile, setViewedProfile] = useState(null);
   const [editingProfile, setEditingProfile] = useState(false);
-  const [myProfile, setMyProfile] = useState(() => USERS[CURRENT_USER] || getUser(CURRENT_USER));
+  const [myProfile, setMyProfile] = useState(() => emptyProfile(CURRENT_USER));
   const [profileDraft, setProfileDraft] = useState(myProfile);
 
   function openProfile(username) {
@@ -2595,16 +2994,69 @@ export default function Homepage({ currentUsername, onLogout }) {
     setProfileDraft(myProfile);
     setEditingProfile(false);
   }
-  function saveProfile() {
-    setMyProfile(profileDraft);
-    setEditingProfile(false);
+  // Profil semua pengguna dari database (GET /api/profiles): foto avatar,
+  // bio, dll. Menggantikan data profil contoh yang dulu tertanam di file ini.
+  const [profilesByUsername, setProfilesByUsername] = useState({});
+  const [profileSaveError, setProfileSaveError] = useState("");
+  function profileFor(username) {
+    return profilesByUsername[username] || emptyProfile(username);
   }
-  // Resolves the right photo for any username: the live (possibly just-
-  // edited) value for the current user, since USERS[CURRENT_USER] itself
-  // never updates — everyone else reads straight from the static USERS data.
+  async function fetchProfiles() {
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      const res = await fetch("/api/profiles", { headers: { Authorization: `Bearer ${token}` } });
+      const result = await res.json();
+      if (!res.ok || !result.profiles) return;
+      const map = {};
+      for (const row of result.profiles) map[row.username] = profileFromApi(row);
+      setProfilesByUsername(map);
+      if (map[CURRENT_USER]) setMyProfile(map[CURRENT_USER]);
+    } catch (err) {
+      console.error("Gagal memuat profil:", err);
+    }
+  }
+  useEffect(() => {
+    fetchProfiles();
+  }, []);
+
+  // Menyimpan perubahan profil sendiri ke database (PATCH /api/profile).
+  // Tampilan diperbarui langsung; kalau gagal, dikembalikan + pesan error.
+  async function saveProfile() {
+    const draft = profileDraft;
+    const previous = myProfile;
+    setProfileSaveError("");
+    setMyProfile(draft);
+    setEditingProfile(false);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Sesi login sudah habis — coba login ulang.");
+      const res = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          realName: draft.realName,
+          showRealName: draft.showRealName,
+          headline: draft.headline,
+          interests: draft.interests,
+          skills: draft.skills,
+          goal: draft.goal,
+          focus: draft.focus || null,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Gagal menyimpan profil.");
+      setProfilesByUsername((prev) => ({ ...prev, [CURRENT_USER]: draft }));
+    } catch (err) {
+      setMyProfile(previous);
+      setProfileSaveError(err.message || "Gagal menyimpan profil.");
+    }
+  }
+  // Foto untuk username mana pun: nilai terkini untuk pengguna sendiri
+  // (baru diunggah/dihapus), selain itu dari profil di database.
   function avatarFor(username) {
     if (username === CURRENT_USER) return myProfile.photoUrl;
-    return getUser(username).photoUrl;
+    return profileFor(username).photoUrl;
   }
 
   // ---- profile photo upload: lives here (Homepage), not inside IdentityCard ----
@@ -2635,13 +3087,13 @@ export default function Homepage({ currentUsername, onLogout }) {
         return;
       }
 
-      const formData = new FormData();
-      formData.append("photo", file);
+      // Foto diunggah LANGSUNG ke Cloudinary; server hanya memverifikasi & menyimpan URL-nya.
+      const uploaded = await uploadDirectToCloudinary(file, "avatar", session.access_token);
 
       const res = await fetch("/api/profile/photo", {
         method: "POST",
-        headers: { Authorization: `Bearer ${session.access_token}` },
-        body: formData,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ publicId: uploaded.publicId }),
       });
       const result = await res.json();
 
@@ -2657,7 +3109,7 @@ export default function Homepage({ currentUsername, onLogout }) {
       setProfileDraft((d) => ({ ...d, photoUrl: result.photoUrl }));
       setPhotoUploading(false);
     } catch (err) {
-      setPhotoUploadError("Gagal upload foto — coba lagi.");
+      setPhotoUploadError(err.uploadMessage || "Gagal upload foto — coba lagi.");
       setPhotoUploading(false);
     }
   }
@@ -2687,7 +3139,6 @@ export default function Homepage({ currentUsername, onLogout }) {
   // tree is the primary flow and filtering is an opt-in refinement.
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterTypes, setFilterTypes] = useState([]);
-  const [filterLevels, setFilterLevels] = useState([]);
   const [sortBy, setSortBy] = useState("terbaru"); // terbaru | judul
 
   function toggleFilter(list, setList, value) {
@@ -2695,9 +3146,8 @@ export default function Homepage({ currentUsername, onLogout }) {
   }
   function clearFilters() {
     setFilterTypes([]);
-    setFilterLevels([]);
   }
-  const activeFilterCount = filterTypes.length + filterLevels.length;
+  const activeFilterCount = filterTypes.length;
 
   function goToRoot() {
     setOpenSubject(null);
@@ -2709,11 +3159,11 @@ export default function Homepage({ currentUsername, onLogout }) {
   }
 
   const modulesInView = useMemo(() => {
-    let result = [...localModules, ...MODULES].filter((m) => {
+    let result = localModules.filter((m) => {
+      if (!matchesModuleKind(m, moduleKindFilter)) return false;
       if (openSubject && m.subject !== openSubject) return false;
-      if (openTopic && m.topic !== openTopic) return false;
+      if (openTopic && String(m.topic || "").trim().toLowerCase() !== String(openTopic).trim().toLowerCase()) return false;
       if (filterTypes.length && !filterTypes.includes(m.type)) return false;
-      if (filterLevels.length && !filterLevels.includes(m.level)) return false;
       if (search.trim()) {
         const q = search.trim().toLowerCase();
         const inTitle = m.title.toLowerCase().includes(q);
@@ -2724,7 +3174,7 @@ export default function Homepage({ currentUsername, onLogout }) {
     });
     if (sortBy === "judul") result = [...result].sort((a, b) => a.title.localeCompare(b.title));
     return result;
-  }, [localModules, openSubject, openTopic, filterTypes, filterLevels, search, sortBy]);
+  }, [localModules, openSubject, openTopic, filterTypes, search, sortBy, moduleKindFilter]);
 
   // When the user searches while sitting inside a folder, broaden the result
   // to a flat search across everything below that point — otherwise typing
@@ -2755,6 +3205,8 @@ export default function Homepage({ currentUsername, onLogout }) {
     supportSoft: "#E3F3EA",
     appliedAccent: "#8A5CD9",
     appliedSoft: "#EDE7FA",
+    exerciseAccent: "#0F9D9A",
+    exerciseSoft: "#DDF3F2",
     likeAccent: "#E0245E",
     line: "rgba(19,32,56,0.1)",
     fieldBg: "rgba(19,32,56,0.045)",
@@ -2794,12 +3246,28 @@ export default function Homepage({ currentUsername, onLogout }) {
   const [moduleDraftTitle, setModuleDraftTitle] = useState("");
   const [moduleDraftSubject, setModuleDraftSubject] = useState("");
   const [moduleDraftTopic, setModuleDraftTopic] = useState("");
-  const [moduleDraftLevel, setModuleDraftLevel] = useState("SL");
+  // Whether Topik is being picked from FOLDER_TREE ("select") or typed
+  // fresh by the user ("custom"). moduleDraftCustomTopic holds the typed
+  // text while in "custom" mode — kept separate from moduleDraftTopic so
+  // switching back to "select" doesn't lose whatever was typed.
+  const [moduleDraftTopicMode, setModuleDraftTopicMode] = useState("select");
+  const [moduleDraftCustomTopic, setModuleDraftCustomTopic] = useState("");
   const [moduleDraftDescription, setModuleDraftDescription] = useState("");
   const [moduleDraftTags, setModuleDraftTags] = useState("");
   const [moduleDraftKind, setModuleDraftKind] = useState("file"); // "file" | "link"
+  const [moduleDraftIsExercise, setModuleDraftIsExercise] = useState(false); // false = materi, true = latihan soal
   const [moduleDraftFile, setModuleDraftFile] = useState(null);
   const [moduleDraftLinkUrl, setModuleDraftLinkUrl] = useState("");
+  // Whether the uploader has explicitly opted in to sending the file itself
+  // (not just title/description/tags) to the AI classifier. Defaults to
+  // false per explicit requirement — reading the file is opt-in, never
+  // the default. Only reachable through the strict 2-second consent modal
+  // (see AiFileConsentModal below), never toggled directly.
+  const [moduleDraftAllowAiFileRead, setModuleDraftAllowAiFileRead] = useState(false);
+  // Controls the consent modal itself — separate from the draft state
+  // above since it's transient UI, not something resetModuleDraft should
+  // need to touch.
+  const [showAiConsentModal, setShowAiConsentModal] = useState(false);
 
   // TagInput's in-progress typed text, keyed by a fieldKey the caller
   // passes in (e.g. "interests", "skills"). Lives here (not inside
@@ -2810,12 +3278,15 @@ export default function Homepage({ currentUsername, onLogout }) {
     setModuleDraftTitle("");
     setModuleDraftSubject("");
     setModuleDraftTopic("");
-    setModuleDraftLevel("SL");
+    setModuleDraftTopicMode("select");
+    setModuleDraftCustomTopic("");
     setModuleDraftDescription("");
     setModuleDraftTags("");
     setModuleDraftKind("file");
+    setModuleDraftIsExercise(false);
     setModuleDraftFile(null);
     setModuleDraftLinkUrl("");
+    setModuleDraftAllowAiFileRead(false);
   }
 
   // reuse the purple already used for "forum" activity type
@@ -2845,9 +3316,18 @@ export default function Homepage({ currentUsername, onLogout }) {
     c, sans, serif, outerStyle, inputStyle,
     CURRENT_USER, onLogout, myProfile,
     activeNav, setActiveNav,
+    showAiEthicsBanner, setShowAiEthicsBanner,
     search, setSearch,
-    heroQuery, setHeroQuery, heroSubmitted, setHeroSubmitted, heroResults,
-    submitHeroSearch, clearHeroSearch,
+    heroQuery, setHeroQuery, heroSubmitted, setHeroSubmitted, heroResults, heroSearching, heroSearchNote,
+    submitHeroSearch, clearHeroSearch, openThreadFromSearch,
+    editingModuleId, setEditingModuleId, editingPostId, setEditingPostId, editingReplyId, setEditingReplyId, savingEdit,
+    saveModuleTitle, saveForumPostEdit, saveForumReplyEdit, forumTypeFilters, setForumTypeFilters,
+    activityItems, activityLoading, activityError, fetchActivity,
+    moduleDraftIsExercise, setModuleDraftIsExercise, moduleKindFilter, setModuleKindFilter,
+    saveModuleType, typeChangeNotifications, setTypeChangeNotifications,
+    openModuleFromMention, startDiscussionAboutModule, openDiscussionsForModule,
+    draftMentionModuleId, setDraftMentionModuleId, forumModuleFilterId, setForumModuleFilterId,
+    highlightedModuleId, profileFor, profileSaveError,
     openPostId, composingPost, setComposingPost,
     draftPostType, setDraftPostType, draftBody, setDraftBody, draftImages, setDraftImages,
     localPosts, pendingPosts, submitForumPost,
@@ -2856,21 +3336,25 @@ export default function Homepage({ currentUsername, onLogout }) {
     deletePost, deleteReply,
     localModules, pendingModuleUploads, modulesLoading, submitModuleUpload,
     deleteModule, deletingModuleId, moduleActionError, previewModule, setPreviewModule,
+    titleChangeNotifications, setTitleChangeNotifications,
     uploadingModule, setUploadingModule,
     moduleDraftTitle, setModuleDraftTitle,
     moduleDraftSubject, setModuleDraftSubject,
     moduleDraftTopic, setModuleDraftTopic,
-    moduleDraftLevel, setModuleDraftLevel,
+    moduleDraftTopicMode, setModuleDraftTopicMode,
+    moduleDraftCustomTopic, setModuleDraftCustomTopic,
     moduleDraftDescription, setModuleDraftDescription,
     moduleDraftTags, setModuleDraftTags,
     moduleDraftKind, setModuleDraftKind,
     moduleDraftFile, setModuleDraftFile,
     moduleDraftLinkUrl, setModuleDraftLinkUrl,
+    moduleDraftAllowAiFileRead, setModuleDraftAllowAiFileRead,
+    showAiConsentModal, setShowAiConsentModal,
     resetModuleDraft,
     likedIds, likeCounts, bookmarkedIds, toggleLike, toggleBookmark,
     replyTarget, setReplyTarget, replyDraft, setReplyDraft,
     openThread, closeThread,
-    filtersOpen, setFiltersOpen, filterTypes, setFilterTypes, filterLevels, setFilterLevels,
+    filtersOpen, setFiltersOpen, filterTypes, setFilterTypes,
     sortBy, setSortBy, toggleFilter, clearFilters, activeFilterCount,
     goToRoot, goToSubject, openSubject, setOpenSubject, setOpenTopic, openTopic,
     modulesInView, isSearching,
@@ -2890,6 +3374,7 @@ export default function Homepage({ currentUsername, onLogout }) {
         <TopBar ctx={ctx} />
         {activeNav === "home" && (
           <div style={{ paddingBottom: 32 }}>
+            <AiEthicsBanner ctx={ctx} />
             <SearchHub ctx={ctx} />
           </div>
         )}
@@ -2939,7 +3424,7 @@ function Sidebar({ ctx }) {
           ?
         </div>
         <span style={{ fontFamily: sans, fontWeight: 700, color: c.ink, fontSize: 13.5, letterSpacing: 0.2, lineHeight: 1.25 }}>
-          [Nama Website] <br />
+          [Website Name] <br />
           <span style={{ opacity: 0.45, fontWeight: 400, fontSize: 11 }}>placeholder</span>
         </span>
       </div>
@@ -2998,14 +3483,14 @@ function Sidebar({ ctx }) {
           <UsernameAvatar username={CURRENT_USER} size={34} photoUrl={myProfile.photoUrl} />
           <div style={{ minWidth: 0 }}>
             <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{CURRENT_USER}</div>
-            <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>{myProfile.showRealName && myProfile.realName ? "Profil terbuka" : "Anonim"}</div>
+            <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>{myProfile.showRealName && myProfile.realName ? "Public profile" : "Anonymous"}</div>
           </div>
         </button>
         {onLogout && (
           <button
             onClick={onLogout}
-            title="Keluar"
-            aria-label="Keluar"
+            title="Log out"
+            aria-label="Log out"
             style={{ flexShrink: 0, width: 38, height: 38, borderRadius: 12, background: c.panel, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: c.inkMuted, fontSize: 15 }}
           >
             ⏻
@@ -3018,19 +3503,19 @@ function Sidebar({ ctx }) {
 
 // ---- top bar -------------------------------------------------
 const TOPBAR_COPY = {
-  home: { title: null, subtitle: "Cari topik apapun — nanti muncul materi dan diskusi forum yang relevan." },
-  modules: { title: "Bank Modul", subtitle: "Jelajahi materi per subject dan topik." },
-  activity: { title: "Aktivitas Terbaru", subtitle: "Apa yang lagi terjadi di ekosistem akademis kamu." },
-  forum: { title: "Forum Diskusi", subtitle: "Sharing ide, cerita riset, atau diskusi apapun — nggak harus soal akademi." },
-  profile: { title: "Profil", subtitle: "Kelola username, nama asli (opsional), dan bio kamu." },
+  home: { title: null, subtitle: "Search any topic — relevant materials, practice problems, and forum discussions will show up." },
+  modules: { title: "Module Bank", subtitle: "Browse materials by subject and topic." },
+  activity: { title: "Recent Activity", subtitle: "What's happening across your academic ecosystem." },
+  forum: { title: "Discussion Forum", subtitle: "Share ideas, research stories, or any discussion — it doesn't have to be about school." },
+  profile: { title: "Profile", subtitle: "Manage your username, real name (optional), and bio." },
 };
 
 function TopBar({ ctx }) {
   const { c, sans, serif, inputStyle, activeNav, viewedProfile, search, setSearch, setActiveNav, CURRENT_USER } = ctx;
-  const homeTitle = `Selamat datang, ${CURRENT_USER} 👋`;
+  const homeTitle = `Welcome, ${CURRENT_USER} 👋`;
   const copy =
     activeNav === "profile" && viewedProfile
-      ? { title: `Profil ${viewedProfile}`, subtitle: "Nama asli hanya tampil kalau pemilik profil mengaktifkannya." }
+      ? { title: `${viewedProfile}'s profile`, subtitle: "Real name only shows if the profile owner turns it on." }
       : activeNav === "home"
       ? { title: homeTitle, subtitle: TOPBAR_COPY.home.subtitle }
       : TOPBAR_COPY[activeNav] || { title: homeTitle, subtitle: TOPBAR_COPY.home.subtitle };
@@ -3046,7 +3531,7 @@ function TopBar({ ctx }) {
           <input
             style={inputStyle}
             type="text"
-            placeholder="Cari modul atau tag..."
+            placeholder="Search modules or tags..."
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -3077,7 +3562,7 @@ function Breadcrumb({ ctx }) {
           padding: "3px 4px",
         }}
       >
-        Bank Modul
+        Module Bank
       </button>
       {openSubject && (
         <>
@@ -3111,7 +3596,7 @@ function Breadcrumb({ ctx }) {
 
 // ---- filter panel (collapsible, closed by default) -------------------------------------------------
 function FilterPanel({ ctx }) {
-  const { c, sans, filtersOpen, filterTypes, setFilterTypes, filterLevels, setFilterLevels, sortBy, setSortBy, toggleFilter, clearFilters, activeFilterCount } = ctx;
+  const { c, sans, filtersOpen, filterTypes, setFilterTypes, sortBy, setSortBy, toggleFilter, clearFilters, activeFilterCount } = ctx;
   if (!filtersOpen) return null;
   const chipStyle = (active) => ({
     padding: "6px 12px",
@@ -3133,16 +3618,6 @@ function FilterPanel({ ctx }) {
             {FILE_TYPES.map((t) => (
               <button key={t} style={chipStyle(filterTypes.includes(t))} onClick={() => toggleFilter(filterTypes, setFilterTypes, t)}>
                 {t}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.inkFaint, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.4 }}>Level</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {LEVELS.map((l) => (
-              <button key={l} style={chipStyle(filterLevels.includes(l))} onClick={() => toggleFilter(filterLevels, setFilterLevels, l)}>
-                {l}
               </button>
             ))}
           </div>
@@ -3222,6 +3697,11 @@ function SearchResultCard({ ctx, m, tier, tierMeta }) {
         <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>
           {m.subject} · {m.topic}
         </div>
+        {tier === "exercises" && (
+          <span style={{ display: "inline-block", marginTop: 4, fontFamily: sans, fontSize: 9.5, fontWeight: 700, color: t.accent, background: t.soft, padding: "1.5px 7px", borderRadius: 999 }}>
+            ✎ Problem set
+          </span>
+        )}
         {m.reason && (
           <div style={{ display: "flex", alignItems: "flex-start", gap: 4, marginTop: 5, fontFamily: sans, fontSize: 10.5, color: t.accent, fontWeight: 600, lineHeight: 1.4 }}>
             <span style={{ fontSize: 9, marginTop: 1, flexShrink: 0 }}>{t.icon}</span> {m.reason}
@@ -3238,13 +3718,13 @@ function SearchResultCard({ ctx, m, tier, tierMeta }) {
 // (same padding/radius/border rhythm) so it reads as "one more result
 // tier", not a bolted-on different widget.
 function ForumSearchResultCard({ ctx, p, tierMeta }) {
-  const { c, sans, setActiveNav, setComposingPost, openThread } = ctx;
+  const { c, sans, setActiveNav, setComposingPost, openThreadFromSearch } = ctx;
   return (
     <button
       onClick={() => {
         setActiveNav("forum");
         setComposingPost(false);
-        openThread(p.id);
+        openThreadFromSearch(p.id);
       }}
       style={{
         display: "flex",
@@ -3267,7 +3747,7 @@ function ForumSearchResultCard({ ctx, p, tierMeta }) {
           {p.body}
         </div>
         <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>
-          {(POST_TYPES[p.postType] || POST_TYPES.diskusi).label}{p.subject ? ` · ${p.subject}` : ""} · {countAllReplies(p.replies)} balasan
+          {(POST_TYPES[p.postType] || POST_TYPES.diskusi).label}{p.subject ? ` · ${p.subject}` : ""} · {p.replyCount ?? countAllReplies(p.replies || [])} replies
         </div>
         {p.reason && (
           <div style={{ display: "flex", alignItems: "flex-start", gap: 4, marginTop: 5, fontFamily: sans, fontSize: 10.5, color: tierMeta.accent, fontWeight: 600, lineHeight: 1.4 }}>
@@ -3285,21 +3765,23 @@ function ForumSearchResultCard({ ctx, p, tierMeta }) {
 function HowItWorks({ ctx }) {
   const { c, sans } = ctx;
   const branches = [
-    { icon: "◉", text: "materi yang langsung bahas topiknya" },
-    { icon: "▲", text: "fondasi yang perlu dipahami dulu" },
-    { icon: "◔", text: "materi & diskusi forum lain yang relevan" },
+    { icon: "◉", text: "materials that cover your topic directly" },
+    { icon: "▲", text: "foundations to understand first" },
+    { icon: "✎", text: "practice problems to test yourself" },
+    { icon: "◔", text: "other relevant materials & forum discussions" },
   ];
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0, marginTop: 18, padding: "14px 10px 4px" }}>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
         <div style={{ width: 34, height: 34, borderRadius: "50%", background: "rgba(255,255,255,0.22)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>⌕</div>
-        <span style={{ fontFamily: sans, fontSize: 9.5, color: "rgba(255,255,255,0.75)", fontWeight: 600 }}>kata kuncimu</span>
+        <span style={{ fontFamily: sans, fontSize: 9.5, color: "rgba(255,255,255,0.75)", fontWeight: 600 }}>your keywords</span>
       </div>
 
-      <svg width="46" height="56" style={{ overflow: "visible", flexShrink: 0 }}>
-        <path d="M0,28 C18,28 18,10 40,10" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" fill="none" />
-        <path d="M0,28 C18,28 18,28 40,28" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" fill="none" />
-        <path d="M0,28 C18,28 18,46 40,46" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" fill="none" />
+      <svg width="46" height="64" style={{ overflow: "visible", flexShrink: 0 }}>
+        <path d="M0,32 C18,32 18,5 40,5" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" fill="none" />
+        <path d="M0,32 C18,32 18,23 40,23" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" fill="none" />
+        <path d="M0,32 C18,32 18,41 40,41" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" fill="none" />
+        <path d="M0,32 C18,32 18,59 40,59" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" fill="none" />
       </svg>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
@@ -3318,17 +3800,102 @@ function HowItWorks({ ctx }) {
 // split into "direct match" vs "related/foundational" tiers. Minimal text,
 // card-based, so a decision is obvious at a glance rather than requiring
 // reading. This stands in for what ML-based semantic search will power later. -------------------------------------------------
+// Closeable, expandable FYI banner about AI usage ethics — shown at the
+// top of the homepage. Two-tier disclosure: a short always-visible summary
+// plus an expandable "Selengkapnya" section, so it's informative without
+// forcing everyone to read a wall of text just to get to the search bar.
+function AiEthicsBanner({ ctx }) {
+  const { c, sans, showAiEthicsBanner, setShowAiEthicsBanner } = ctx;
+  const [expanded, setExpanded] = useState(false);
+
+  if (!showAiEthicsBanner) return null;
+
+  return (
+    <div style={{ padding: "6px 32px 0" }}>
+      <div style={{ borderRadius: 16, background: c.appliedSoft, border: `1px solid ${c.appliedAccent}30`, padding: "16px 18px", marginBottom: 14, position: "relative" }}>
+        <button
+          onClick={() => setShowAiEthicsBanner(false)}
+          aria-label="Tutup"
+          style={{
+            position: "absolute", top: 12, right: 12, width: 24, height: 24, borderRadius: "50%", border: "none",
+            background: "rgba(255,255,255,0.6)", color: c.inkMuted, fontSize: 13, cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >
+          ×
+        </button>
+
+        <div style={{ display: "flex", gap: 12, paddingRight: 28 }}>
+          <div style={{ fontSize: 20, flexShrink: 0 }}>🤝</div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 4 }}>
+              Kami menjunjung tinggi orisinalitas ide
+            </div>
+            <div style={{ fontFamily: sans, fontSize: 11.5, color: c.inkMuted, lineHeight: 1.55 }}>
+              AI di sini cuma membantu menyarankan tag topik — bukan menilai atau menggantikan karya kamu. Secara default, AI cuma memakai <strong>judul, deskripsi, dan tag</strong> yang kamu ketik saat upload modul.
+            </div>
+
+            <button
+              onClick={() => setExpanded((e) => !e)}
+              style={{
+                marginTop: 8, background: "none", border: "none", cursor: "pointer", padding: 0,
+                fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.appliedAccent,
+                display: "flex", alignItems: "center", gap: 4,
+              }}
+            >
+              {expanded ? "Tutup detail" : "Selengkapnya"}
+              <span style={{ fontSize: 9, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>▾</span>
+            </button>
+
+            {expanded && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${c.appliedAccent}25`, display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                  <span style={{ fontSize: 14, flexShrink: 0 }}>📝</span>
+                  <div style={{ fontFamily: sans, fontSize: 11, color: c.inkMuted, lineHeight: 1.55 }}>
+                    <strong style={{ color: c.ink }}>Bawaan (selalu aktif):</strong> AI membaca judul, deskripsi, subject, topik, dan tag yang kamu isi untuk menyarankan tag tambahan. Isi filemu sendiri tidak pernah disentuh dengan cara ini.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                  <span style={{ fontSize: 14, flexShrink: 0 }}>🔒</span>
+                  <div style={{ fontFamily: sans, fontSize: 11, color: c.inkMuted, lineHeight: 1.55 }}>
+                    <strong style={{ color: c.ink }}>Opsional, dengan izin ketat:</strong> Kamu bisa memilih supaya AI membaca isi file (untuk saran tag yang lebih akurat, dan menyesuaikan judul kalau perlu). Ini selalu off secara default, dan butuh persetujuan eksplisit tiap kali upload — tidak pernah otomatis.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                  <span style={{ fontSize: 14, flexShrink: 0 }}>🔗</span>
+                  <div style={{ fontFamily: sans, fontSize: 11, color: c.inkMuted, lineHeight: 1.55 }}>
+                    <strong style={{ color: c.ink }}>Modul berupa link:</strong> tidak pernah dianalisis AI sama sekali, baik judul/deskripsi maupun isi link-nya.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                  <span style={{ fontSize: 14, flexShrink: 0 }}>👤</span>
+                  <div style={{ fontFamily: sans, fontSize: 11, color: c.inkMuted, lineHeight: 1.55 }}>
+                    <strong style={{ color: c.ink }}>Kamu tetap yang menentukan:</strong> tag hasil AI adalah saran, bukan keputusan final, dan judul yang disesuaikan AI selalu bisa kamu edit kembali kapan saja.
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SearchHub({ ctx }) {
-  const { c, sans, serif, heroQuery, setHeroQuery, heroSubmitted, heroResults, submitHeroSearch, clearHeroSearch, forumAccent } = ctx;
+  const { c, sans, serif, heroQuery, setHeroQuery, heroSubmitted, heroResults, heroSearching, heroSearchNote, submitHeroSearch, clearHeroSearch, forumAccent } = ctx;
   const hasQuery = heroSubmitted.trim().length > 0;
+  // Query yang benar-benar dipakai server (sudah dikoreksi kalau ada salah ketik).
+  const shownQuery = (heroResults && heroResults.query) || heroSubmitted;
 
   // Central config for the four result tiers — one place that drives colors,
   // icons, labels, and the sub-explanation text everywhere below.
   const TIER = {
-    direct: { label: "Langsung membahas topik ini", sub: 'Modul yang isinya memang tentang "{q}"', accent: c.directAccent, soft: c.directSoft, icon: "◉" },
-    foundational: { label: "Fondasi — pelajari ini dulu", sub: "Konsep dasar yang jadi prasyarat sebelum paham \"{q}\"", accent: c.foundationAccent, soft: c.foundationSoft, icon: "▲" },
-    supporting: { label: "Pendukung — memperdalam pemahaman", sub: 'Konteks tambahan yang berkaitan dengan "{q}"', accent: c.supportAccent, soft: c.supportSoft, icon: "◆" },
-    applied: { label: "Aplikasi — dipakai juga di sini", sub: '"{q}" muncul lagi dalam bentuk lain di subject ini', accent: c.appliedAccent, soft: c.appliedSoft, icon: "◈" },
+    direct: { label: "Directly covers this topic", sub: 'Modules whose content is actually about "{q}"', accent: c.directAccent, soft: c.directSoft, icon: "◉" },
+    foundational: { label: "Foundations — study these first", sub: 'Background knowledge that will help you understand "{q}"', accent: c.foundationAccent, soft: c.foundationSoft, icon: "▲" },
+    exercises: { label: "Practice problems — test yourself", sub: 'Problem sets to practice "{q}"', accent: c.exerciseAccent, soft: c.exerciseSoft, icon: "✎" },
+    supporting: { label: "Supporting — deepen your understanding", sub: 'Extra context related to "{q}"', accent: c.supportAccent, soft: c.supportSoft, icon: "◆" },
+    applied: { label: "Applications — used here too", sub: '"{q}" shows up again in another form in this subject', accent: c.appliedAccent, soft: c.appliedSoft, icon: "◈" },
   };
   const forumTierMeta = { accent: c.appliedAccent, soft: c.appliedSoft, icon: "◔" };
 
@@ -3344,10 +3911,10 @@ function SearchHub({ ctx }) {
         }}
       >
         <div style={{ fontFamily: sans, fontSize: 11.5, fontWeight: 700, color: "rgba(255,255,255,0.85)", marginBottom: 3, letterSpacing: 0.3, textTransform: "uppercase" }}>
-          Pencarian universal
+          Universal search
         </div>
         <div style={{ fontFamily: serif, fontSize: 17, color: "#FFFFFF", marginBottom: 14, lineHeight: 1.4 }}>
-          Cari satu topik, temukan semua yang membantu kamu memahaminya.
+          Search one topic, find everything that helps you understand it.
         </div>
         <div style={{ position: "relative" }}>
           <span style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: c.blue, fontSize: 15 }}>⌕</span>
@@ -3356,7 +3923,7 @@ function SearchHub({ ctx }) {
             value={heroQuery}
             onChange={(e) => setHeroQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitHeroSearch(heroQuery)}
-            placeholder="mis. belajar gelombang..."
+            placeholder="e.g. learn about waves..."
             style={{
               width: "100%",
               padding: "13px 16px 13px 42px",
@@ -3389,9 +3956,15 @@ function SearchHub({ ctx }) {
                 cursor: "pointer",
               }}
             >
-              Cari
+              Search
             </button>
           )}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", marginTop: 12 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 999, background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.35)", color: "#FFFFFF", fontFamily: sans, fontSize: 11, fontWeight: 600 }}>
+            <span style={{ fontWeight: 800 }}>✎</span> Search results also recommend practice problem sets for your topic
+          </span>
         </div>
 
         {!hasQuery && (
@@ -3422,26 +3995,40 @@ function SearchHub({ ctx }) {
       </div>
 
       {/* results */}
-      {hasQuery && (
+      {hasQuery && (heroSearching || !heroResults) && (
+        <div style={{ padding: "36px 20px", textAlign: "center", borderRadius: 14, border: `1px dashed ${c.line}`, background: c.card }}>
+          <div style={{ fontSize: 22, marginBottom: 6 }}>🔎</div>
+          <div style={{ fontFamily: sans, fontSize: 12.5, color: c.inkMuted }}>
+            Searching materials, practice problems & discussions related to <strong style={{ color: c.ink }}>"{heroSubmitted}"</strong>…
+          </div>
+        </div>
+      )}
+      {hasQuery && !heroSearching && heroResults && (
         <div style={{ paddingBottom: 8 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
             <span style={{ fontFamily: sans, fontSize: 12.5, color: c.inkMuted }}>
-              Materi & diskusi forum untuk <strong style={{ color: c.ink }}>"{heroSubmitted}"</strong>
+              Materials, practice problems & forum discussions for <strong style={{ color: c.ink }}>"{shownQuery}"</strong>
             </span>
             <button onClick={clearHeroSearch} style={{ background: "none", border: "none", color: c.inkFaint, fontFamily: sans, fontSize: 11.5, cursor: "pointer", textDecoration: "underline" }}>
-              Cari topik lain
+              Search another topic
             </button>
           </div>
 
-          {["direct", "foundational", "supporting", "applied", "forum"].every((k) => heroResults[k].length === 0) ? (
+          {heroSearchNote && (
+            <div style={{ fontFamily: sans, fontSize: 11.5, color: c.inkMuted, background: c.fieldBg, borderRadius: 10, padding: "8px 12px", marginBottom: 12 }}>
+              {heroSearchNote}
+            </div>
+          )}
+
+          {["direct", "foundational", "exercises", "supporting", "applied", "forum"].every((k) => (heroResults[k] || []).length === 0) ? (
             <div style={{ padding: "36px 20px", textAlign: "center", borderRadius: 14, border: `1px dashed ${c.line}`, background: c.card }}>
               <div style={{ fontSize: 22, marginBottom: 6 }}>🔍</div>
-              <div style={{ fontFamily: sans, fontSize: 12.5, color: c.inkMuted }}>Belum ada materi atau diskusi forum yang cocok untuk pencarian ini.</div>
+              <div style={{ fontFamily: sans, fontSize: 12.5, color: c.inkMuted }}>No materials, practice problems, or forum discussions match this search yet.</div>
             </div>
           ) : (
             <>
-              {["direct", "foundational", "supporting", "applied"].map((tierKey) => {
-                const items = heroResults[tierKey];
+              {["direct", "foundational", "exercises", "supporting", "applied"].map((tierKey) => {
+                const items = heroResults[tierKey] || [];
                 if (items.length === 0) return null;
                 const t = TIER[tierKey];
                 return (
@@ -3451,7 +4038,7 @@ function SearchHub({ ctx }) {
                       <span style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: c.ink }}>{t.label}</span>
                     </div>
                     <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint, marginLeft: 16, marginBottom: 10 }}>
-                      {t.sub.replace("{q}", heroSubmitted)}
+                      {t.sub.replace("{q}", shownQuery)}
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
                       {items.map((m, i) => (
@@ -3466,10 +4053,10 @@ function SearchHub({ ctx }) {
                 <div style={{ marginBottom: 20 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 3 }}>
                     <span style={{ width: 8, height: 8, borderRadius: "50%", background: forumTierMeta.accent, display: "inline-block", flexShrink: 0 }} />
-                    <span style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: c.ink }}>Diskusi forum terkait</span>
+                    <span style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: c.ink }}>Related forum discussions</span>
                   </div>
                   <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint, marginLeft: 16, marginBottom: 10 }}>
-                    Thread di Forum Diskusi yang nyambung dengan "{heroSubmitted}"
+                    Threads in the Discussion Forum related to "{shownQuery}"
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
                     {heroResults.forum.map((p, i) => (
@@ -3515,10 +4102,10 @@ function TagChip({ ctx, tag }) {
 
 // ---- folder grid (subjects at root, topics inside a subject) -------------------------------------------------
 function FolderGrid({ ctx }) {
-  const { c, sans, openSubject, setOpenTopic, goToSubject } = ctx;
+  const { c, sans, openSubject, setOpenTopic, goToSubject, localModules, moduleKindFilter } = ctx;
   const items = openSubject
-    ? FOLDER_TREE[openSubject].map((topic) => ({ key: topic, label: topic, count: moduleCountFor(openSubject, topic) }))
-    : SUBJECT_ORDER.map((subject) => ({ key: subject, label: subject, count: moduleCountFor(subject) }));
+    ? moduleTopicsFor(openSubject, localModules).map((t) => ({ key: t.name, label: t.name, isNew: t.isNew, count: moduleCountFor(openSubject, t.name, localModules, moduleKindFilter) }))
+    : SUBJECT_ORDER.map((subject) => ({ key: subject, label: subject, count: moduleCountFor(subject, undefined, localModules, moduleKindFilter) }));
 
   return (
     <div style={{ padding: "0 32px", marginBottom: 22 }}>
@@ -3545,7 +4132,7 @@ function FolderGrid({ ctx }) {
             <div style={{ minWidth: 0 }}>
               <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.label}</div>
               <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>
-                {item.count} modul{item.key === "Philosophy" && !openSubject ? " · sharing, bukan materi resmi" : ""}
+                {item.count} modul{item.key === "Philosophy" && !openSubject ? " · sharing, bukan materi resmi" : ""}{item.isNew ? " · topik baru" : ""}
               </div>
             </div>
           </button>
@@ -3557,7 +4144,7 @@ function FolderGrid({ ctx }) {
 
 // ---- module list (files inside the current folder / search results) -------------------------------------------------
 function ModuleList({ ctx, heading }) {
-  const { c, sans, modulesInView, isSearching, openSubject, openProfile, avatarFor, CURRENT_USER, deleteModule, deletingModuleId, moduleActionError, setPreviewModule } = ctx;
+  const { c, sans, modulesInView, isSearching, openSubject, openProfile, avatarFor, CURRENT_USER, deleteModule, deletingModuleId, moduleActionError, setPreviewModule, editingModuleId, setEditingModuleId, savingEdit, saveModuleTitle, saveModuleType, localPosts, startDiscussionAboutModule, openDiscussionsForModule, highlightedModuleId } = ctx;
   return (
     <div style={{ padding: "0 32px" }}>
       {heading && (
@@ -3583,16 +4170,20 @@ function ModuleList({ ctx, heading }) {
           {modulesInView.map((m, i) => {
             const isOwner = m.uploader === CURRENT_USER;
             const isDeleting = deletingModuleId === m.id;
+            const isEditing = editingModuleId === m.id;
+            const discussionCount = localPosts.filter((p) => p.moduleId === m.id).length;
             const isLink = m.type === "LINK";
             const hasRealSource = !!m.fileUrl || !!m.linkUrl;
             return (
               <div
-                key={i}
+                key={m.id || i}
+                id={`module-card-${m.id}`}
                 onClick={() => { if (hasRealSource) setPreviewModule(m); }}
-                title={hasRealSource ? "Klik untuk pratinjau" : "Data contoh — tidak ada file sungguhan"}
+                title="Klik untuk pratinjau"
                 style={{
                   display: "flex", alignItems: "flex-start", gap: 13, padding: "13px 15px", borderRadius: 13,
-                  background: c.card, border: `1px solid ${c.line}`, opacity: isDeleting ? 0.5 : 1,
+                  background: c.card, border: `1px solid ${highlightedModuleId === m.id ? c.blue : c.line}`, opacity: isDeleting ? 0.5 : 1,
+                  boxShadow: highlightedModuleId === m.id ? `0 0 0 4px ${c.blue}33` : "none", transition: "box-shadow 0.4s, border-color 0.4s",
                   cursor: hasRealSource ? "pointer" : "default",
                 }}
               >
@@ -3601,10 +4192,21 @@ function ModuleList({ ctx, heading }) {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                    <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 13, color: c.ink }}>{m.title}</div>
+                    {isEditing ? (
+                      <div style={{ flex: 1 }} onClick={(e) => e.stopPropagation()}>
+                        <InlineTextEditor ctx={ctx} initial={m.title} maxLength={200} saving={savingEdit} placeholder="Judul modul" onSave={(t) => saveModuleTitle(m.id, t)} onCancel={() => setEditingModuleId(null)} />
+                      </div>
+                    ) : (
+                      <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 13, color: c.ink }}>{m.title}</div>
+                    )}
                     {isLink && (
                       <span style={{ fontFamily: sans, fontSize: 9.5, fontWeight: 700, color: c.blue, background: c.blueSoft, padding: "1.5px 7px", borderRadius: 999, flexShrink: 0 }}>
                         🔗 Link
+                      </span>
+                    )}
+                    {m.isExercise && (
+                      <span style={{ fontFamily: sans, fontSize: 9.5, fontWeight: 700, color: c.exerciseAccent, background: c.exerciseSoft, padding: "1.5px 7px", borderRadius: 999, flexShrink: 0 }}>
+                        ✎ Latihan soal
                       </span>
                     )}
                     {m.isShare && (
@@ -3613,16 +4215,62 @@ function ModuleList({ ctx, heading }) {
                       </span>
                     )}
                   </div>
+                  {m.originalTitle && m.originalTitle !== m.title && !isEditing && (
+                    <div style={{ fontFamily: sans, fontSize: 10.5, color: c.blue, marginBottom: 5, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span>✨ Judul disesuaikan AI · judul asli: "{m.originalTitle}"</span>
+                      {isOwner && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); saveModuleTitle(m.id, m.originalTitle); }}
+                          disabled={savingEdit}
+                          style={{ background: "none", border: `1px solid ${c.blue}55`, color: c.blue, borderRadius: 999, padding: "1px 9px", fontFamily: sans, fontSize: 10, fontWeight: 700, cursor: "pointer" }}
+                        >
+                          Pakai judul asli
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {m.exerciseSetBy === "ai" && !isEditing && (
+                    <div style={{ fontFamily: sans, fontSize: 10.5, color: c.exerciseAccent, marginBottom: 5 }}>
+                      ✨ Jenis diatur AI: {m.isExercise ? "latihan soal" : "materi"}
+                    </div>
+                  )}
                   {m.description && (
                     <div style={{ fontFamily: sans, fontSize: 11.5, color: c.inkMuted, marginBottom: 5, lineHeight: 1.4 }}>{m.description}</div>
                   )}
                   <div style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint, marginBottom: 7 }}>
-                    {m.subject} {isSearching || !openSubject ? `· ${m.topic}` : ""} · {m.level}{m.size ? ` · ${m.size}` : ""} · {m.date}
+                    {m.subject} {isSearching || !openSubject ? `· ${m.topic}` : ""}{m.size ? ` · ${m.size}` : ""} · {m.date}
                   </div>
                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                     {m.tags.map((t, ti) => (
                       <TagChip key={ti} ctx={ctx} tag={t} />
                     ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); startDiscussionAboutModule(m); }}
+                      title="Mulai diskusi di forum tentang modul ini"
+                      style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.blue }}
+                    >
+                      💬 Diskusikan
+                    </button>
+                    {discussionCount > 0 && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openDiscussionsForModule(m); }}
+                        title="Lihat diskusi di forum yang menyebut modul ini"
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.inkMuted }}
+                      >
+                        {discussionCount} diskusi →
+                      </button>
+                    )}
+                    {isOwner && !isEditing && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); saveModuleType(m.id, !m.isExercise); }}
+                        disabled={savingEdit}
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: sans, fontSize: 10.5, color: c.inkFaint, textDecoration: "underline" }}
+                      >
+                        {m.isExercise ? "Ubah jadi materi" : "Tandai sebagai latihan soal"}
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
@@ -3634,6 +4282,15 @@ function ModuleList({ ctx, heading }) {
                     <span style={{ fontFamily: sans, fontSize: 11, color: c.inkMuted }}>{m.uploader}</span>
                   </button>
                   {isOwner && (
+                    <>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setEditingModuleId(isEditing ? null : m.id); }}
+                      title="Edit judul"
+                      aria-label="Edit judul modul"
+                      style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: c.inkFaint, fontSize: 14, lineHeight: 1 }}
+                    >
+                      ✏️
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -3646,6 +4303,7 @@ function ModuleList({ ctx, heading }) {
                     >
                       🗑️
                     </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -3662,21 +4320,33 @@ function ModuleList({ ctx, heading }) {
 function BankModulSection({ ctx }) {
   const {
     c, sans, inputStyle, openTopic, isSearching, search,
+    goToSubject, setOpenTopic, setEditingModuleId, saveModuleTitle, savingEdit,
     uploadingModule, setUploadingModule,
     moduleDraftTitle, setModuleDraftTitle,
     moduleDraftSubject, setModuleDraftSubject,
     moduleDraftTopic, setModuleDraftTopic,
-    moduleDraftLevel, setModuleDraftLevel,
+    moduleDraftTopicMode, setModuleDraftTopicMode,
+    moduleDraftCustomTopic, setModuleDraftCustomTopic,
     moduleDraftDescription, setModuleDraftDescription,
     moduleDraftTags, setModuleDraftTags,
     moduleDraftKind, setModuleDraftKind,
+    moduleDraftIsExercise, setModuleDraftIsExercise,
     moduleDraftFile, setModuleDraftFile,
     moduleDraftLinkUrl, setModuleDraftLinkUrl,
+    moduleDraftAllowAiFileRead, setModuleDraftAllowAiFileRead,
+    showAiConsentModal, setShowAiConsentModal,
     resetModuleDraft, submitModuleUpload,
+    moduleKindFilter, setModuleKindFilter, typeChangeNotifications, setTypeChangeNotifications, saveModuleType,
     modulesLoading, localModules, pendingModuleUploads,
+    titleChangeNotifications, setTitleChangeNotifications,
     openSubject,
   } = ctx;
   const showFolders = !isSearching && !openTopic;
+  const kindCounts = {
+    all: localModules.length,
+    material: localModules.filter((m) => !m.isExercise).length,
+    exercise: localModules.filter((m) => m.isExercise).length,
+  };
 
   if (uploadingModule) return (
     <ModuleUploadComposer
@@ -3684,12 +4354,16 @@ function BankModulSection({ ctx }) {
       moduleDraftTitle={moduleDraftTitle} setModuleDraftTitle={setModuleDraftTitle}
       moduleDraftSubject={moduleDraftSubject} setModuleDraftSubject={setModuleDraftSubject}
       moduleDraftTopic={moduleDraftTopic} setModuleDraftTopic={setModuleDraftTopic}
-      moduleDraftLevel={moduleDraftLevel} setModuleDraftLevel={setModuleDraftLevel}
+      moduleDraftTopicMode={moduleDraftTopicMode} setModuleDraftTopicMode={setModuleDraftTopicMode}
+      moduleDraftCustomTopic={moduleDraftCustomTopic} setModuleDraftCustomTopic={setModuleDraftCustomTopic}
       moduleDraftDescription={moduleDraftDescription} setModuleDraftDescription={setModuleDraftDescription}
       moduleDraftTags={moduleDraftTags} setModuleDraftTags={setModuleDraftTags}
       moduleDraftKind={moduleDraftKind} setModuleDraftKind={setModuleDraftKind}
+      moduleDraftIsExercise={moduleDraftIsExercise} setModuleDraftIsExercise={setModuleDraftIsExercise}
       moduleDraftFile={moduleDraftFile} setModuleDraftFile={setModuleDraftFile}
       moduleDraftLinkUrl={moduleDraftLinkUrl} setModuleDraftLinkUrl={setModuleDraftLinkUrl}
+      moduleDraftAllowAiFileRead={moduleDraftAllowAiFileRead} setModuleDraftAllowAiFileRead={setModuleDraftAllowAiFileRead}
+      showAiConsentModal={showAiConsentModal} setShowAiConsentModal={setShowAiConsentModal}
       setUploadingModule={setUploadingModule} resetModuleDraft={resetModuleDraft} submitModuleUpload={submitModuleUpload}
     />
   );
@@ -3699,7 +4373,7 @@ function BankModulSection({ ctx }) {
       <Breadcrumb ctx={ctx} />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 32px", marginBottom: 12 }}>
         <span style={{ fontFamily: sans, fontSize: 11.5, color: c.inkFaint, fontStyle: "italic" }}>
-          {modulesLoading ? "Memuat modul..." : `${localModules.length} modul dari database · sisanya data contoh`}
+          {modulesLoading ? "Memuat modul..." : `${localModules.length} modul`}
         </span>
         <div style={{ display: "flex", gap: 8 }}>
           <button
@@ -3717,6 +4391,83 @@ function BankModulSection({ ctx }) {
           <FilterToggleButton ctx={ctx} />
         </div>
       </div>
+      {titleChangeNotifications.length > 0 && (
+        <div style={{ padding: "0 32px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          {titleChangeNotifications.map((note) => (
+            <div key={note.id} style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, padding: "12px 15px", borderRadius: 12, background: c.blueSoft, border: `1px solid ${c.blue}30` }}>
+              <div style={{ display: "flex", gap: 10, minWidth: 0 }}>
+                <span style={{ fontSize: 15, flexShrink: 0 }}>✨</span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12, color: c.ink, marginBottom: 2 }}>Judul disesuaikan AI</div>
+                  <div style={{ fontFamily: sans, fontSize: 11, color: c.inkMuted, lineHeight: 1.5 }}>
+                    "{note.oldTitle}" → <strong style={{ color: c.ink }}>"{note.newTitle}"</strong>. Kamu tetap bisa mengeditnya kapan saja.
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                    <button
+                      onClick={() => {
+                        const mod = localModules.find((x) => x.id === note.moduleId);
+                        if (mod) { goToSubject(mod.subject); setOpenTopic(mod.topic); setEditingModuleId(mod.id); }
+                      }}
+                      style={{ background: c.blue, color: "#FFFFFF", border: "none", borderRadius: 999, padding: "4px 12px", fontFamily: sans, fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}
+                    >
+                      Edit judul
+                    </button>
+                    <button
+                      onClick={() => saveModuleTitle(note.moduleId, note.oldTitle)}
+                      disabled={savingEdit}
+                      style={{ background: "none", color: c.blue, border: `1px solid ${c.blue}55`, borderRadius: 999, padding: "4px 12px", fontFamily: sans, fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}
+                    >
+                      Pakai judul asli
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setTitleChangeNotifications((prev) => prev.filter((n) => n.id !== note.id))}
+                aria-label="Tutup"
+                style={{ background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 13, padding: 0, flexShrink: 0 }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {typeChangeNotifications.length > 0 && (
+        <div style={{ padding: "0 32px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          {typeChangeNotifications.map((note) => (
+            <div key={note.id} style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, padding: "12px 15px", borderRadius: 12, background: c.exerciseSoft, border: `1px solid ${c.exerciseAccent}33` }}>
+              <div style={{ display: "flex", gap: 10, minWidth: 0 }}>
+                <span style={{ fontSize: 15, flexShrink: 0 }}>✨</span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12, color: c.ink, marginBottom: 2 }}>
+                    AI mengubah jenis modul menjadi {note.isExercise ? "Latihan soal (exercises)" : "Materi"}
+                  </div>
+                  <div style={{ fontFamily: sans, fontSize: 11, color: c.inkMuted, lineHeight: 1.5 }}>
+                    "{note.title}" — kamu tetap bisa mengembalikannya kapan saja.
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <button
+                      onClick={() => saveModuleType(note.moduleId, !note.isExercise)}
+                      disabled={savingEdit}
+                      style={{ background: c.exerciseAccent, color: "#FFFFFF", border: "none", borderRadius: 999, padding: "4px 12px", fontFamily: sans, fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}
+                    >
+                      Kembalikan jadi {note.isExercise ? "materi" : "latihan soal"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setTypeChangeNotifications((prev) => prev.filter((n) => n.id !== note.id))}
+                aria-label="Tutup"
+                style={{ background: "none", border: "none", cursor: "pointer", color: c.inkFaint, fontSize: 13, padding: 0, flexShrink: 0 }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {pendingModuleUploads.length > 0 && (
         <div style={{ padding: "0 32px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
           {pendingModuleUploads.map((pending) => (
@@ -3731,6 +4482,30 @@ function BankModulSection({ ctx }) {
           ))}
         </div>
       )}
+      <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap", padding: "0 32px", marginBottom: 12 }}>
+        <span style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.inkFaint, marginRight: 2 }}>Jenis:</span>
+        {[
+          { key: "all", label: "Semua", color: c.ink },
+          { key: "material", label: "📘 Materi", color: c.blue },
+          { key: "exercise", label: "✎ Exercises", color: c.exerciseAccent },
+        ].map((opt) => {
+          const active = moduleKindFilter === opt.key;
+          return (
+            <button
+              key={opt.key}
+              onClick={() => setModuleKindFilter(opt.key)}
+              aria-pressed={active}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 999,
+                border: `1px solid ${active ? opt.color : c.line}`, background: active ? `${opt.color}14` : c.card,
+                color: active ? opt.color : c.inkMuted, fontFamily: sans, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
+              }}
+            >
+              {opt.label} <span style={{ fontWeight: 600, opacity: 0.7 }}>{kindCounts[opt.key]}</span>
+            </button>
+          );
+        })}
+      </div>
       <FilterPanel ctx={ctx} />
       {showFolders && <FolderGrid ctx={ctx} />}
       {(!showFolders || isSearching) && <ModuleList ctx={ctx} heading={isSearching ? `Hasil pencarian "${search.trim()}"` : openTopic} />}
@@ -3757,6 +4532,9 @@ function ForumSection({ ctx }) {
     replyTarget, setReplyTarget, replyDraft, setReplyDraft,
     openThread, closeThread,
     openPostId,
+    editingPostId, setEditingPostId, editingReplyId, setEditingReplyId, savingEdit,
+    saveForumPostEdit, saveForumReplyEdit, forumTypeFilters, setForumTypeFilters,
+    localModules, draftMentionModuleId, setDraftMentionModuleId, openModuleFromMention, forumModuleFilterId, setForumModuleFilterId,
   } = ctx;
 
   // Bundled the same way as the already-hoisted forum leaf components
@@ -3774,27 +4552,69 @@ function ForumSection({ ctx }) {
     submitForumPost, submitForumReply,
     replyTarget, setReplyTarget, replyDraft, setReplyDraft,
     openThread, closeThread,
+    editingPostId, setEditingPostId, editingReplyId, setEditingReplyId, savingEdit,
+    saveForumPostEdit, saveForumReplyEdit, forumTypeFilters, setForumTypeFilters,
+    localModules, draftMentionModuleId, setDraftMentionModuleId, openModuleFromMention, forumModuleFilterId, setForumModuleFilterId,
   };
 
   if (composingPost) return <NewPostComposer ctx={forumCtx} />;
-  const openPost = openPostId ? [...localPosts, ...FORUM_POSTS].find((p) => p.id === openPostId) : null;
+  const openPost = openPostId ? localPosts.find((p) => p.id === openPostId) : null;
   if (openPost) return <ThreadDetail ctx={forumCtx} post={openPost} />;
   return <PostList ctx={forumCtx} />;
 }
 
 // ---- activity feed (its own section, separate from Beranda) -------------------------------------------------
 function ActivityFeed({ ctx }) {
-  const { c, sans, openProfile, avatarFor } = ctx;
+  const { c, sans, openProfile, avatarFor, activityItems, activityLoading, activityError, fetchActivity, setActiveNav, setComposingPost, setOpenSubject, setOpenTopic, openThreadFromSearch } = ctx;
+
+  // Data asli dari database. Kalau gagal dimuat, tampilkan pesan error saja.
+  const rows = activityItems
+    ? activityItems.map((it) => ({ key: it.id, type: it.type, user: it.user, subject: it.subject, text: it.text, time: relativeTimeId(it.createdAt), target: it.target }))
+    : [];
+
+  function openTarget(target) {
+    if (!target) return;
+    if (target.kind === "post") {
+      setActiveNav("forum");
+      setComposingPost(false);
+      openThreadFromSearch(target.id);
+    } else if (target.kind === "module") {
+      setActiveNav("modules");
+      setOpenSubject(target.subject);
+      setOpenTopic(target.topic);
+    }
+  }
+
   return (
     <div style={{ padding: "0 32px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 12 }}>
-        <span style={{ fontFamily: sans, fontSize: 11.5, color: c.inkFaint, fontStyle: "italic" }}>data contoh · belum dinamis</span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={{ fontFamily: sans, fontSize: 11.5, color: c.inkFaint, fontStyle: "italic" }}>
+          aktivitas terbaru dari database
+        </span>
+        <button
+          onClick={fetchActivity}
+          disabled={activityLoading}
+          style={{ background: "none", border: `1px solid ${c.line}`, borderRadius: 999, padding: "5px 12px", fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.inkMuted, cursor: activityLoading ? "default" : "pointer" }}
+        >
+          {activityLoading ? "Memuat..." : "↻ Muat ulang"}
+        </button>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {ACTIVITY_FEED.map((item, i) => {
+
+      {activityError && (
+        <div style={{ marginBottom: 12, padding: "9px 13px", borderRadius: 10, background: "#D9553A14", fontFamily: sans, fontSize: 11.5, color: "#D9553A" }}>{activityError}</div>
+      )}
+
+      {!activityLoading && !activityError && activityItems && activityItems.length === 0 && (
+        <div style={{ padding: "36px 20px", textAlign: "center", borderRadius: 14, border: `1px dashed ${c.line}`, background: c.card, fontFamily: sans, fontSize: 12.5, color: c.inkMuted }}>
+          Belum ada aktivitas. Upload modul atau mulai diskusi untuk memulai!
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, opacity: activityLoading && !activityItems ? 0.5 : 1 }}>
+        {rows.map((item) => {
           const meta = TYPE_META[item.type];
           return (
-            <div key={i} style={{ display: "flex", gap: 12, padding: "13px 16px", borderRadius: 12, background: c.card, border: `1px solid ${c.line}`, alignItems: "flex-start" }}>
+            <div key={item.key} style={{ display: "flex", gap: 12, padding: "13px 16px", borderRadius: 12, background: c.card, border: `1px solid ${c.line}`, alignItems: "flex-start" }}>
               <button onClick={() => openProfile(item.user)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}>
                 <UsernameAvatar username={item.user} size={32} photoUrl={avatarFor(item.user)} />
               </button>
@@ -3813,6 +4633,14 @@ function ActivityFeed({ ctx }) {
                   <span style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>· {item.time}</span>
                 </div>
               </div>
+              {item.target && (
+                <button
+                  onClick={() => openTarget(item.target)}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.blue, flexShrink: 0, padding: "2px 0" }}
+                >
+                  Lihat →
+                </button>
+              )}
             </div>
           );
         })}
@@ -3823,11 +4651,11 @@ function ActivityFeed({ ctx }) {
 
 // ---- right panel: subject directory -------------------------------------------------
 function RightPanel({ ctx }) {
-  const { c, sans, setActiveNav, goToSubject, openSubject } = ctx;
+  const { c, sans, setActiveNav, goToSubject, openSubject, localModules } = ctx;
   return (
     <div style={{ width: 260, flexShrink: 0, borderLeft: `1px solid ${c.line}`, padding: "24px 20px", boxSizing: "border-box", overflowY: "auto" }}>
-      <h2 style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 700, color: c.ink, margin: "0 0 3px" }}>Jelajahi subject</h2>
-      <p style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint, margin: "0 0 14px" }}>Jumlah modul per subject</p>
+      <h2 style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 700, color: c.ink, margin: "0 0 3px" }}>Browse subjects</h2>
+      <p style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint, margin: "0 0 14px" }}>Modules per subject</p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         {SUBJECT_ORDER.map((s) => (
@@ -3841,16 +4669,16 @@ function RightPanel({ ctx }) {
           >
             <span style={{ fontFamily: sans, fontSize: 12.5, color: c.ink }}>{s}</span>
             <span style={{ fontFamily: sans, fontSize: 10.5, fontWeight: 700, color: c.blue, background: c.blueSoft, padding: "2px 8px", borderRadius: 999, minWidth: 20, textAlign: "center" }}>
-              {moduleCountFor(s)}
+              {moduleCountFor(s, undefined, localModules)}
             </span>
           </button>
         ))}
       </div>
 
       <div style={{ marginTop: 18, padding: "14px 14px", borderRadius: 12, background: c.blueSoft }}>
-        <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12, color: c.ink, marginBottom: 4 }}>💡 Tau nggak?</div>
+        <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12, color: c.ink, marginBottom: 4 }}>💡 Did you know?</div>
         <div style={{ fontFamily: sans, fontSize: 11, color: c.inkMuted, lineHeight: 1.55 }}>
-          Forum dan Bank Modul selalu memakai username — nama asli bersifat opsional dan hanya tampil di profil kalau kamu aktifkan sendiri.
+          The forum and Module Bank always use usernames — your real name is optional and only shows on your profile if you turn it on.
         </div>
       </div>
     </div>
@@ -4757,10 +5585,310 @@ function ProfileEdit({ ctx, profileDraft, setLightboxAvatar, setShowQuestionnair
 // Real name is the one field gated by an explicit visibility flag: it's
 // rendered only when `showRealName` is true, and only ever here — never
 // in any list, card, or post anywhere else in the app.
+// ---- editor inline kecil (judul modul, balasan) ------------------------------------------------
+// Module-scope + state teks di dalam komponen ini sendiri: mengetik tidak
+// me-render ulang Homepage dan fokus input tidak hilang.
+function InlineTextEditor({ ctx, initial, multiline, maxLength, saving, placeholder, onSave, onCancel }) {
+  const { c, sans } = ctx;
+  const [value, setValue] = useState(initial || "");
+  const trimmed = value.trim();
+  const unchanged = trimmed === String(initial || "").trim();
+  const fieldStyle = {
+    width: "100%", boxSizing: "border-box", padding: "8px 10px", borderRadius: 9, border: `1px solid ${c.line}`,
+    background: c.fieldBg, fontFamily: sans, fontSize: 12.5, color: c.ink, outline: "none", resize: "vertical",
+  };
+  return (
+    <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {multiline ? (
+        <textarea rows={3} autoFocus value={value} maxLength={maxLength} placeholder={placeholder} onChange={(e) => setValue(e.target.value)} style={fieldStyle} />
+      ) : (
+        <input
+          autoFocus
+          value={value}
+          maxLength={maxLength}
+          placeholder={placeholder}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && trimmed && !unchanged && !saving) onSave(trimmed);
+            if (e.key === "Escape") onCancel();
+          }}
+          style={fieldStyle}
+        />
+      )}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          onClick={() => onSave(trimmed)}
+          disabled={saving || !trimmed || unchanged}
+          style={{ background: c.blue, color: "#FFFFFF", border: "none", borderRadius: 999, padding: "5px 14px", fontFamily: sans, fontSize: 11, fontWeight: 700, cursor: saving || !trimmed || unchanged ? "default" : "pointer", opacity: saving || !trimmed || unchanged ? 0.5 : 1 }}
+        >
+          {saving ? "Menyimpan..." : "Simpan"}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          style={{ background: "none", color: c.inkMuted, border: `1px solid ${c.line}`, borderRadius: 999, padding: "5px 14px", fontFamily: sans, fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+        >
+          Batal
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Editor post: isi + jenis post. Subject/topik post tidak diubah lewat edit.
+function PostEditor({ ctx, post, saving, onSave, onCancel }) {
+  const { c, sans } = ctx;
+  const [body, setBody] = useState(post.body || "");
+  const [postType, setPostType] = useState(post.postType);
+  const [moduleId, setModuleId] = useState(post.moduleId || null);
+  const trimmed = body.trim();
+  const moduleChanged = moduleId !== (post.moduleId || null);
+  const unchanged = trimmed === String(post.body || "").trim() && postType === post.postType && !moduleChanged;
+  return (
+    <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {Object.entries(POST_TYPES).map(([key, meta]) => {
+          const active = postType === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setPostType(key)}
+              style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 11px", borderRadius: 999, border: `1px solid ${active ? meta.color : c.line}`, background: active ? `${meta.color}14` : c.card, color: active ? meta.color : c.inkMuted, fontFamily: sans, fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+            >
+              {meta.icon} {meta.label}
+            </button>
+          );
+        })}
+      </div>
+      <ModuleMentionField ctx={ctx} moduleId={moduleId} onChange={setModuleId} fallback={post.module} />
+      <textarea
+        rows={5}
+        autoFocus
+        value={body}
+        maxLength={5000}
+        onChange={(e) => setBody(e.target.value)}
+        style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: `1px solid ${c.line}`, background: c.fieldBg, fontFamily: sans, fontSize: 13.5, lineHeight: 1.55, color: c.ink, outline: "none", resize: "vertical" }}
+      />
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          onClick={() => onSave({ body: trimmed, postType, moduleId: moduleChanged ? moduleId : undefined })}
+          disabled={saving || !trimmed || unchanged}
+          style={{ background: c.blue, color: "#FFFFFF", border: "none", borderRadius: 999, padding: "6px 16px", fontFamily: sans, fontSize: 11.5, fontWeight: 700, cursor: saving || !trimmed || unchanged ? "default" : "pointer", opacity: saving || !trimmed || unchanged ? 0.5 : 1 }}
+        >
+          {saving ? "Menyimpan..." : "Simpan perubahan"}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          style={{ background: "none", color: c.inkMuted, border: `1px solid ${c.line}`, borderRadius: 999, padding: "6px 16px", fontFamily: sans, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}
+        >
+          Batal
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---- aktivitas pengguna (di halaman profil) -----------------------------------------------------
+// Modul, post forum, dan balasan milik `username`. Di profil sendiri (editable)
+// ada tombol edit/hapus; di profil pengguna lain hanya bisa dilihat dan dibuka.
+// Data diambil dari state yang sudah dimuat di Homepage (modul & feed forum dari database).
+function MyActivityPanel({ ctx, username, editable }) {
+  const {
+    c, sans, localModules, localPosts, localReplies,
+    setActiveNav, setComposingPost, setOpenSubject, setOpenTopic, openThreadFromSearch,
+    deleteModule, deletePost, deleteReply,
+    editingModuleId, setEditingModuleId, editingPostId, setEditingPostId, editingReplyId, setEditingReplyId,
+    savingEdit, saveModuleTitle, saveForumPostEdit, saveForumReplyEdit,
+    moduleActionError, forumActionError, openModuleFromMention,
+  } = ctx;
+  const [tab, setTab] = useState("modul");
+
+  const myModules = localModules.filter((m) => m.uploader === username);
+  const myPosts = localPosts.filter((p) => p.author === username);
+  const myReplies = [];
+  for (const [postId, list] of Object.entries(localReplies)) {
+    for (const r of list) if (r.author === username) myReplies.push({ ...r, postId });
+  }
+  const snippet = (t, n = 110) => {
+    const x = String(t || "").replace(/\s+/g, " ").trim();
+    return x.length > n ? `${x.slice(0, n - 1)}…` : x;
+  };
+  const goToModule = (m) => { setActiveNav("modules"); setOpenSubject(m.subject); setOpenTopic(m.topic); };
+  const goToPost = (id) => { setActiveNav("forum"); setComposingPost(false); openThreadFromSearch(id); };
+  const who = editable ? "Kamu" : username;
+
+  const tabs = [
+    { key: "modul", label: "Modul", count: myModules.length },
+    { key: "post", label: "Post forum", count: myPosts.length },
+    { key: "balasan", label: "Balasan", count: myReplies.length },
+  ];
+  const actionBtn = (color) => ({ background: "none", border: "none", cursor: "pointer", fontFamily: sans, fontSize: 11, fontWeight: 700, color: color || c.blue, padding: "2px 4px" });
+  const rowStyle = { padding: "13px 15px", borderRadius: 12, background: c.card, border: `1px solid ${c.line}` };
+  const emptyBox = (text) => (
+    <div style={{ padding: "28px 20px", textAlign: "center", borderRadius: 14, border: `1px dashed ${c.line}`, background: c.card, fontFamily: sans, fontSize: 12.5, color: c.inkMuted }}>{text}</div>
+  );
+
+  return (
+    <div style={{ marginTop: 24, padding: "20px 22px", borderRadius: 16, background: c.card, border: `1px solid ${c.line}` }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 }}>
+        <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 14, color: c.ink }}>{editable ? "Aktivitas saya" : `Aktivitas ${username}`}</div>
+        <div style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint }}>
+          {myModules.length} modul · {myPosts.length} post · {myReplies.length} balasan
+        </div>
+      </div>
+      <div style={{ fontFamily: sans, fontSize: 11.5, color: c.inkMuted, marginBottom: 14 }}>
+        {editable
+          ? "Semua yang pernah kamu unggah atau tulis. Dari sini kamu bisa mengedit atau menghapusnya."
+          : `Modul, post forum, dan balasan yang pernah dibagikan ${username}.`}
+      </div>
+
+      <div style={{ display: "flex", gap: 7, marginBottom: 14, flexWrap: "wrap" }}>
+        {tabs.map((t) => {
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 13px", borderRadius: 999, border: `1px solid ${active ? c.blue : c.line}`, background: active ? c.blueSoft : c.card, color: active ? c.blue : c.inkMuted, fontFamily: sans, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}
+            >
+              {t.label} <span style={{ opacity: 0.7 }}>{t.count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {editable && (tab === "modul" ? moduleActionError : forumActionError) && (
+        <div style={{ marginBottom: 12, padding: "9px 13px", borderRadius: 10, background: "#D9553A14", fontFamily: sans, fontSize: 11.5, color: "#D9553A" }}>
+          {tab === "modul" ? moduleActionError : forumActionError}
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {tab === "modul" && (myModules.length === 0
+          ? emptyBox(`${who} belum mengunggah modul.`)
+          : myModules.map((m) => (
+              <div key={m.id} style={rowStyle}>
+                {editable && editingModuleId === m.id ? (
+                  <InlineTextEditor ctx={ctx} initial={m.title} maxLength={200} saving={savingEdit} placeholder="Judul modul" onSave={(t) => saveModuleTitle(m.id, t)} onCancel={() => setEditingModuleId(null)} />
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 13, color: c.ink }}>{m.title}</div>
+                    {m.isExercise && (
+                      <span style={{ fontFamily: sans, fontSize: 9.5, fontWeight: 700, color: c.exerciseAccent, background: c.exerciseSoft, padding: "1.5px 7px", borderRadius: 999 }}>✎ Latihan soal</span>
+                    )}
+                  </div>
+                )}
+                {editable && m.originalTitle && m.originalTitle !== m.title && editingModuleId !== m.id && (
+                  <div style={{ fontFamily: sans, fontSize: 10.5, color: c.blue, marginTop: 3 }}>✨ Judul disesuaikan AI · judul asli: "{m.originalTitle}"</div>
+                )}
+                <div style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint, marginTop: 4 }}>
+                  {m.subject} · {m.topic} · {m.type === "LINK" ? "Link" : m.type} · {m.date}
+                </div>
+                <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                  <button onClick={() => goToModule(m)} style={actionBtn()}>Lihat di folder</button>
+                  {editable && (
+                    <>
+                      <button onClick={() => setEditingModuleId(editingModuleId === m.id ? null : m.id)} style={actionBtn()}>✏️ Edit judul</button>
+                      {m.originalTitle && m.originalTitle !== m.title && (
+                        <button onClick={() => saveModuleTitle(m.id, m.originalTitle)} disabled={savingEdit} style={actionBtn()}>Pakai judul asli</button>
+                      )}
+                      <button
+                        onClick={() => { if (window.confirm("Hapus modul ini? Tindakan ini tidak bisa dibatalkan.")) deleteModule(m.id); }}
+                        style={actionBtn("#D9553A")}
+                      >
+                        🗑️ Hapus
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )))}
+
+        {tab === "post" && (myPosts.length === 0
+          ? emptyBox(`${who} belum membuat post di forum.`)
+          : myPosts.map((p) => (
+              <div key={p.id} style={rowStyle}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6, flexWrap: "wrap" }}>
+                  <PostTypeBadge ctx={ctx} type={p.postType} />
+                  {p.subject && <span style={{ fontFamily: sans, fontSize: 10.5, fontWeight: 700, color: c.blue }}>{p.subject}</span>}
+                  <span style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>· {p.time}{p.edited ? " · diedit" : ""}</span>
+                </div>
+                {editable && editingPostId === p.id ? (
+                  <PostEditor ctx={ctx} post={p} saving={savingEdit} onSave={(draft) => saveForumPostEdit(p.id, draft)} onCancel={() => setEditingPostId(null)} />
+                ) : (
+                  <div style={{ fontFamily: sans, fontSize: 12.5, color: c.ink, lineHeight: 1.5 }}>{snippet(p.body, 180)}</div>
+                )}
+                {p.module && !(editable && editingPostId === p.id) && (
+                  <button
+                    onClick={() => openModuleFromMention(p.module)}
+                    style={{ marginTop: 6, background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.blue, textAlign: "left" }}
+                  >
+                    📘 Membahas modul: {p.module.title}
+                  </button>
+                )}
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button onClick={() => goToPost(p.id)} style={actionBtn()}>Buka thread</button>
+                  {editable && (
+                    <>
+                      <button onClick={() => setEditingPostId(editingPostId === p.id ? null : p.id)} style={actionBtn()}>✏️ Edit</button>
+                      <button
+                        onClick={() => { if (window.confirm("Hapus post ini? Semua balasannya juga akan terhapus.")) deletePost(p.id); }}
+                        style={actionBtn("#D9553A")}
+                      >
+                        🗑️ Hapus
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )))}
+
+        {tab === "balasan" && (myReplies.length === 0
+          ? emptyBox(`${who} belum membalas diskusi apa pun.`)
+          : myReplies.map((r) => {
+              const parent = localPosts.find((p) => p.id === r.postId);
+              return (
+                <div key={r.id} style={rowStyle}>
+                  {parent && (
+                    <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint, marginBottom: 5 }}>
+                      Membalas {parent.author}: "{snippet(parent.body, 70)}"
+                    </div>
+                  )}
+                  {editable && editingReplyId === r.id ? (
+                    <InlineTextEditor ctx={ctx} initial={r.body} multiline maxLength={3000} saving={savingEdit} placeholder="Isi balasan" onSave={(t) => saveForumReplyEdit(r.id, t)} onCancel={() => setEditingReplyId(null)} />
+                  ) : (
+                    <div style={{ fontFamily: sans, fontSize: 12.5, color: c.ink, lineHeight: 1.5 }}>
+                      {snippet(r.body, 180)}
+                      <span style={{ fontSize: 10.5, color: c.inkFaint }}> · {r.time}{r.edited ? " · diedit" : ""}</span>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <button onClick={() => goToPost(r.postId)} style={actionBtn()}>Buka thread</button>
+                    {editable && (
+                      <>
+                        <button onClick={() => setEditingReplyId(editingReplyId === r.id ? null : r.id)} style={actionBtn()}>✏️ Edit</button>
+                        <button
+                          onClick={() => { if (window.confirm("Hapus balasan ini? Balasan di bawahnya (jika ada) juga akan terhapus.")) deleteReply(r.postId, r.id); }}
+                          style={actionBtn("#D9553A")}
+                        >
+                          🗑️ Hapus
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            }))}
+      </div>
+    </div>
+  );
+}
+
 function ProfileSection({ ctx }) {
-  const { viewedProfile, myProfile, editingProfile, profileDraft } = ctx;
+  const { viewedProfile, myProfile, editingProfile, profileDraft, profileFor, profileSaveError, CURRENT_USER } = ctx;
   const isOwnProfile = viewedProfile === null;
-  const profile = isOwnProfile ? myProfile : getUser(viewedProfile);
+  const profile = isOwnProfile ? myProfile : profileFor(viewedProfile);
 
   // Lightbox state: holds { username, photoUrl } for whoever's avatar is
   // being viewed full-size, or null when closed. Shared across both the
@@ -4777,6 +5905,9 @@ function ProfileSection({ ctx }) {
 
   return (
     <div style={{ padding: "0 32px 32px", maxWidth: 980 }}>
+      {profileSaveError && (
+        <div style={{ marginBottom: 12, padding: "9px 13px", borderRadius: 10, background: "#D9553A14", fontFamily: "inherit", fontSize: 11.5, color: "#D9553A" }}>{profileSaveError}</div>
+      )}
       {isOwnProfile && editingProfile ? (
         <ProfileEdit
           ctx={ctx}
@@ -4788,6 +5919,7 @@ function ProfileSection({ ctx }) {
       ) : (
         <ProfileView ctx={ctx} profile={profile} isOwnProfile={isOwnProfile} editingProfile={editingProfile} setLightboxAvatar={setLightboxAvatar} />
       )}
+      {!editingProfile && <MyActivityPanel ctx={ctx} username={isOwnProfile ? CURRENT_USER : viewedProfile} editable={isOwnProfile} />}
       <PhotoLightbox lightboxAvatar={lightboxAvatar} setLightboxAvatar={setLightboxAvatar} />
       <RiasecQuestionnaire key={questionnaireSession} ctx={ctx} showQuestionnaire={showQuestionnaire} setShowQuestionnaire={setShowQuestionnaire} />
     </div>

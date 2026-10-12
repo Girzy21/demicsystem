@@ -1,51 +1,50 @@
 // API route: GET/POST /api/modules
 //
 // GET  -> fetch all real modules (from Supabase), with each uploader's
-//         username joined in from profiles (never exposing real_name —
-//         see the public_profiles view note below).
-// POST -> upload a module file of ANY type to Cloudinary ("modules"
-//         folder) then insert its metadata into the modules table.
+//         username joined in from public_profiles (never exposes
+//         real_name unless show_real_name is true).
+// POST -> either upload a file to Cloudinary and insert its metadata, or
+//         (kind="link") store an external link with no Cloudinary
+//         involvement at all. allow_ai_file_read is only ever meaningful
+//         for file-mode uploads — always stored as false for links.
 //
-// Tags inserted here are always { label, source: "manual" } — there's no
-// ML tagging yet. When that's added later, it'll append additional
-// { label, source: "ai", confidence } tags after upload, which the
-// uploader can confirm or dismiss (human-in-the-loop, not fully automatic).
+// UPLOAD FILE (anti batas 4,5 MB Vercel): file TIDAK lagi lewat server ini.
+// Browser mengunggah langsung ke Cloudinary (lihat /api/cloudinary-signature),
+// lalu mengirim JSON berisi metadata + { upload: { publicId, resourceType, filename } }.
+// Server memverifikasi upload itu ke Cloudinary sebelum menyimpannya. Format
+// multipart/form-data lama tetap didukung untuk file kecil.
+//
+// Disesuaikan dengan Homepage terbaru:
+//   - "level" tidak lagi dikirim frontend -> opsional, default "Both"
+//   - "topicIsCustom" dari frontend sekarang disimpan ke topic_is_custom
+//   - setelah insert, modul langsung di-embed untuk pencarian semantik
+//     (kegagalan embedding TIDAK menggagalkan upload)
+//   - "isExercise": uploader menandai modul sebagai latihan soal (problem set)
+//     atau materi; AI boleh menyesuaikan nanti (lihat lib/moduleTagging.js)
 
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { cloudinary } from "@/lib/cloudinary";
+import { verifyUpload, deriveFileType, resourceTypeForFileType, safeBaseName, MODULE_MAX_BYTES } from "@/lib/cloudinaryUploads";
+import { embedModule } from "@/lib/embeddings";
 
-const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25MB — generous for lecture-note PDFs/slides
-
-// A handful of common extensions get a friendly display label; anything
-// else just shows its own extension uppercased (e.g. "CSV", "ZIP") rather
-// than being rejected — the point is "any file type", not "these five".
-const FRIENDLY_TYPE_LABELS = {
-  pdf: "PDF",
-  doc: "DOCX",
-  docx: "DOCX",
-  ppt: "PPTX",
-  pptx: "PPTX",
-  txt: "TXT",
-  xls: "XLSX",
-  xlsx: "XLSX",
-  csv: "CSV",
-  zip: "ZIP",
-};
-
-function deriveFileType(filename) {
-  const ext = (filename.split(".").pop() || "").toLowerCase();
-  if (!ext || ext === filename.toLowerCase()) return "FILE"; // no extension at all
-  return FRIENDLY_TYPE_LABELS[ext] || ext.toUpperCase();
-}
+const VALID_LEVELS = ["SL", "HL", "Both"];
 
 export async function GET() {
   try {
-    const { data: modules, error } = await supabaseAdmin
+    // is_exercise / exercise_set_by baru ada setelah SQL tahap 3; sebelum itu
+    // daftar modul tetap dimuat tanpa kolom tersebut.
+    const baseCols = "id, title, original_title, subject, topic, topic_is_custom, level, description, file_type, file_url, link_url, file_size_bytes, tags, created_at, uploader_id";
+    let { data: modules, error } = await supabaseAdmin
       .from("modules")
-      .select("id, title, subject, topic, level, description, file_type, file_url, link_url, file_size_bytes, tags, created_at, uploader_id")
+      .select(`${baseCols}, is_exercise, exercise_set_by`)
       .order("created_at", { ascending: false });
-
+    if (error && error.code === "42703") {
+      ({ data: modules, error } = await supabaseAdmin
+        .from("modules")
+        .select(baseCols)
+        .order("created_at", { ascending: false }));
+    }
     if (error) {
       console.error("Gagal mengambil daftar modul:", error);
       return NextResponse.json({ error: "Gagal mengambil daftar modul." }, { status: 500 });
@@ -93,22 +92,39 @@ export async function POST(request) {
       return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
     }
 
-    // ---- 2. Read form fields ----------------------------
-    const formData = await request.formData();
-    const title = (formData.get("title") || "").toString().trim();
-    const subject = (formData.get("subject") || "").toString().trim();
-    const topic = (formData.get("topic") || "").toString().trim();
-    const level = (formData.get("level") || "").toString().trim();
-    const description = (formData.get("description") || "").toString().trim();
-    const tagsRaw = (formData.get("tags") || "").toString().trim(); // comma-separated
-    const kind = (formData.get("kind") || "file").toString(); // "file" | "link"
+    // ---- 2. Baca field: JSON (cara utama) atau multipart (cara lama) ----
+    const isJson = (request.headers.get("content-type") || "").includes("application/json");
+    let jsonBody = null;
+    let formData = null;
+    if (isJson) jsonBody = await request.json().catch(() => ({}));
+    else formData = await request.formData();
+    const field = (name) => {
+      const v = isJson ? jsonBody[name] : formData.get(name);
+      return v === null || v === undefined ? "" : typeof v === "string" ? v : String(v);
+    };
+    const truthy = (name) => {
+      const v = isJson ? jsonBody[name] : formData.get(name);
+      return v === true || String(v || "") === "true";
+    };
+    const title = field("title").trim();
+    const subject = field("subject").trim();
+    const topic = field("topic").trim();
+    const levelRaw = field("level").trim();
+    const topicIsCustom = truthy("topicIsCustom");
+    const description = field("description").trim();
+    const tagsRaw = field("tags").trim(); // dipisah koma
+    const kind = field("kind") || "file"; // "file" | "link"
+    const isExercise = truthy("isExercise");
 
-    if (!title || !subject || !topic || !level) {
-      return NextResponse.json({ error: "Judul, subject, topik, dan level wajib diisi." }, { status: 400 });
+    if (!title || !subject || !topic) {
+      return NextResponse.json({ error: "Judul, subject, dan topik wajib diisi." }, { status: 400 });
     }
-    if (!["SL", "HL", "Both"].includes(level)) {
+    // Level sudah tidak dipakai di UI terbaru: kosong -> "Both". Kalau ada
+    // tapi bukan nilai yang valid, tetap ditolak (tidak diam-diam diubah).
+    if (levelRaw && !VALID_LEVELS.includes(levelRaw)) {
       return NextResponse.json({ error: "Level harus SL, HL, atau Both." }, { status: 400 });
     }
+    const level = levelRaw || "Both";
 
     const manualTags = tagsRaw
       ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean).map((label) => ({ label, source: "manual" }))
@@ -119,16 +135,21 @@ export async function POST(request) {
       title,
       subject,
       topic,
+      topic_is_custom: topicIsCustom,
       level,
       description: description || null,
       tags: manualTags,
+      // Pilihan uploader. AI boleh menyesuaikan setelah analisis bila yakin
+      // (exercise_set_by = 'user' berarti belum pernah diubah siapa pun).
+      is_exercise: isExercise,
+      exercise_set_by: "user",
     };
 
     let row;
 
     if (kind === "link") {
-      // ---- Link-based module: no Cloudinary involved at all ----------
-      const linkUrl = (formData.get("linkUrl") || "").toString().trim();
+      // ---- Link-based module: no Cloudinary involved, no AI file read ----
+      const linkUrl = field("linkUrl").trim();
       if (!linkUrl) {
         return NextResponse.json({ error: "URL link wajib diisi." }, { status: 400 });
       }
@@ -141,30 +162,48 @@ export async function POST(request) {
       if (!["http:", "https:"].includes(parsed.protocol)) {
         return NextResponse.json({ error: "URL harus diawali http:// atau https://" }, { status: 400 });
       }
-      row = { ...baseRow, link_url: linkUrl, file_url: null, file_type: null, cloudinary_public_id: null, file_size_bytes: null };
+      row = {
+        ...baseRow,
+        link_url: linkUrl,
+        file_url: null,
+        file_type: null,
+        cloudinary_public_id: null,
+        file_size_bytes: null,
+        allow_ai_file_read: false, // links never get AI file analysis — no exceptions
+      };
+    } else if (isJson) {
+      // ---- File-based module, cara utama: sudah diunggah langsung ke Cloudinary ----
+      const upload = jsonBody.upload || {};
+      const resourceType = upload.resourceType === "raw" ? "raw" : "image";
+      const check = await verifyUpload({ publicId: upload.publicId, resourceType, purpose: "module", userId: user.id });
+      if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+      const resource = check.resource;
+      // Jenis file diturunkan dari nama file asli yang dikirim browser; kalau
+      // jenis resource-nya tidak cocok, tolak (mencegah data yang tidak konsisten).
+      const fileType = deriveFileType(upload.filename || "");
+      if (resourceTypeForFileType(fileType) !== resourceType) {
+        return NextResponse.json({ error: "Data upload tidak konsisten. Coba upload ulang." }, { status: 400 });
+      }
+      row = {
+        ...baseRow,
+        file_type: fileType,
+        file_url: resource.secure_url,
+        cloudinary_public_id: resource.public_id,
+        file_size_bytes: resource.bytes,
+        link_url: null,
+        allow_ai_file_read: truthy("allowAiFileRead"),
+      };
     } else {
-      // ---- File-based module: upload to Cloudinary first ----------
+      // ---- File-based module, cara lama: file lewat server (hanya aman untuk file kecil di Vercel) ----
       const file = formData.get("file");
       if (!file || typeof file === "string") {
         return NextResponse.json({ error: "Tidak ada file yang diupload." }, { status: 400 });
       }
-      if (file.size > MAX_FILE_BYTES) {
-        return NextResponse.json({ error: "Ukuran file maksimal 25MB." }, { status: 400 });
+      if (file.size > MODULE_MAX_BYTES) {
+        return NextResponse.json({ error: `Ukuran file maksimal ${Math.round(MODULE_MAX_BYTES / 1048576)}MB.` }, { status: 400 });
       }
       const fileType = deriveFileType(file.name || "");
-
-      // Resource type affects how Cloudinary DELIVERS the file, not just how
-      // it's stored. Files uploaded as resource_type "raw" are generally
-      // served with a Content-Disposition that forces a download — fine for
-      // types with no browser-native preview anyway (DOCX/PPTX go through
-      // Google Docs Viewer, TXT is fetched as plain text), but it breaks
-      // inline preview for PDFs and images, which Cloudinary explicitly
-      // supports delivering as resource_type "image" (PDFs are treated as a
-      // first-class image-adjacent type there, not just photos). So: PDFs and
-      // images upload as "image" to get real inline preview support; every
-      // other file type uploads as "raw" as before.
-      const previewableTypes = new Set(["PDF", "PNG", "JPG", "JPEG", "GIF", "WEBP", "SVG"]);
-      const resourceType = previewableTypes.has(fileType) ? "image" : "raw";
+      const resourceType = resourceTypeForFileType(fileType);
 
       const bytes = await file.arrayBuffer();
       const base64 = Buffer.from(bytes).toString("base64");
@@ -172,7 +211,8 @@ export async function POST(request) {
       const uploadResult = await cloudinary.uploader.upload(dataUri, {
         folder: "modules",
         resource_type: resourceType,
-        public_id: `${Date.now()}_${file.name.replace(/\.[^.]+$/, "")}`,
+        public_id: `${Date.now()}_${safeBaseName(file.name)}`,
+        context: `uploader=${user.id}|purpose=module`,
       });
 
       row = {
@@ -182,22 +222,35 @@ export async function POST(request) {
         cloudinary_public_id: uploadResult.public_id,
         file_size_bytes: file.size,
         link_url: null,
+        allow_ai_file_read: truthy("allowAiFileRead"),
       };
     }
 
     // ---- 4. Insert module metadata ----------------------------
-    const { data: mod, error: insertError } = await supabaseAdmin
+    let { data: mod, error: insertError } = await supabaseAdmin
       .from("modules")
       .insert(row)
       .select()
       .single();
+    if (insertError && insertError.code === "42703") {
+      // SQL tahap 3 belum dijalankan: simpan tanpa kolom jenis modul.
+      const { is_exercise, exercise_set_by, ...legacyRow } = row;
+      ({ data: mod, error: insertError } = await supabaseAdmin.from("modules").insert(legacyRow).select().single());
+    }
 
     if (insertError) {
       console.error("Gagal menyimpan metadata modul:", insertError);
       return NextResponse.json({ error: "Gagal menyimpan modul. Coba lagi." }, { status: 500 });
     }
 
-    return NextResponse.json({ module: mod });
+    // ---- 5. Embedding awal untuk pencarian semantik ----------------
+    // Berbasis judul/subject/topik/deskripsi/tag manual. Embedding ini
+    // dibuat ulang otomatis setelah tag & kata kunci AI selesai
+    // (lihat suggest-tags). Tidak pernah melempar error.
+    await embedModule(mod.id);
+
+    const { embedding, ...modForClient } = mod;
+    return NextResponse.json({ module: modForClient });
   } catch (err) {
     console.error("Gagal memproses upload modul:", err);
     return NextResponse.json({ error: "Gagal mengupload modul." }, { status: 500 });
