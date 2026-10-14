@@ -22,6 +22,7 @@
 //   - "isExercise": uploader menandai modul sebagai latihan soal (problem set)
 //     atau materi; AI boleh menyesuaikan nanti (lihat lib/moduleTagging.js)
 
+import { assertActive } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { cloudinary } from "@/lib/cloudinary";
@@ -30,8 +31,20 @@ import { embedModule } from "@/lib/embeddings";
 
 const VALID_LEVELS = ["SL", "HL", "Both"];
 
-export async function GET() {
+export async function GET(request) {
   try {
+    // Wajib login: Homepage mengirim token Supabase (lihat fetchModules).
+    const authToken = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    if (!authToken) {
+      return NextResponse.json({ error: "Tidak ada token autentikasi." }, { status: 401 });
+    }
+    const {
+      data: { user: authUser },
+      error: authErr,
+    } = await supabaseAdmin.auth.getUser(authToken);
+    if (authErr || !authUser) {
+      return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
+    }
     // is_exercise / exercise_set_by baru ada setelah SQL tahap 3; sebelum itu
     // daftar modul tetap dimuat tanpa kolom tersebut.
     const baseCols = "id, title, original_title, subject, topic, topic_is_custom, level, description, file_type, file_url, link_url, file_size_bytes, tags, created_at, uploader_id";
@@ -91,6 +104,9 @@ export async function POST(request) {
     if (authError || !user) {
       return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
     }
+
+    const blocked = await assertActive(user.id);
+    if (blocked) return blocked;
 
     // ---- 2. Baca field: JSON (cara utama) atau multipart (cara lama) ----
     const isJson = (request.headers.get("content-type") || "").includes("application/json");

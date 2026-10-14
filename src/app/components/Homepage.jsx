@@ -1,3 +1,4 @@
+import PeopleDirectory from "./PeopleDirectory";
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -178,6 +179,7 @@ const NAV_ITEMS = [
   { key: "modules", label: "Module Bank", icon: "▤" },
   { key: "activity", label: "Recent Activity", icon: "◷" },
   { key: "forum", label: "Discussion Forum", icon: "◔" },
+  { key: "people", label: "People", icon: "◎" },
   { key: "profile", label: "Profile", icon: "◐" },
 ];
 
@@ -2318,7 +2320,11 @@ export default function Homepage({ currentUsername, onLogout }) {
   async function fetchModules() {
     setModulesLoading(true);
     try {
-      const res = await fetch("/api/modules");
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return;
+      const res = await fetch("/api/modules", { headers: { Authorization: `Bearer ${session.access_token}` } });
       const result = await res.json();
       if (res.ok && result.modules) {
         setLocalModules(result.modules.map(moduleFromApiRow));
@@ -3327,7 +3333,7 @@ export default function Homepage({ currentUsername, onLogout }) {
     saveModuleType, typeChangeNotifications, setTypeChangeNotifications,
     openModuleFromMention, startDiscussionAboutModule, openDiscussionsForModule,
     draftMentionModuleId, setDraftMentionModuleId, forumModuleFilterId, setForumModuleFilterId,
-    highlightedModuleId, profileFor, profileSaveError,
+    highlightedModuleId, profileFor, profileSaveError, profilesByUsername, UsernameAvatar,
     openPostId, composingPost, setComposingPost,
     draftPostType, setDraftPostType, draftBody, setDraftBody, draftImages, setDraftImages,
     localPosts, pendingPosts, submitForumPost,
@@ -3391,6 +3397,11 @@ export default function Homepage({ currentUsername, onLogout }) {
         {activeNav === "forum" && (
           <div style={{ paddingTop: 4, paddingBottom: 32 }}>
             <ForumSection ctx={ctx} />
+          </div>
+        )}
+        {activeNav === "people" && (
+          <div style={{ paddingTop: 4, paddingBottom: 32 }}>
+            <PeopleDirectory ctx={ctx} />
           </div>
         )}
         {activeNav === "profile" && (
@@ -3507,6 +3518,7 @@ const TOPBAR_COPY = {
   modules: { title: "Module Bank", subtitle: "Browse materials by subject and topic." },
   activity: { title: "Recent Activity", subtitle: "What's happening across your academic ecosystem." },
   forum: { title: "Discussion Forum", subtitle: "Share ideas, research stories, or any discussion — it doesn't have to be about school." },
+  people: { title: "People", subtitle: "Discover students across the school — interests, skills, and what they are working on." },
   profile: { title: "Profile", subtitle: "Manage your username, real name (optional), and bio." },
 };
 
@@ -3525,7 +3537,7 @@ function TopBar({ ctx }) {
         <h1 style={{ fontFamily: serif, fontSize: 22, color: c.ink, margin: 0 }}>{copy.title}</h1>
         <p style={{ fontFamily: sans, fontSize: 12.5, color: c.inkMuted, margin: "4px 0 0" }}>{copy.subtitle}</p>
       </div>
-      {activeNav !== "home" && activeNav !== "profile" && (
+      {activeNav !== "home" && activeNav !== "profile" && activeNav !== "people" && (
         <div style={{ position: "relative", width: 240, flexShrink: 0 }}>
           <span style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: c.inkFaint, fontSize: 13 }}>⌕</span>
           <input

@@ -8,6 +8,7 @@
 // Setelah balasan tersimpan, embedding thread (post induk) diperbarui
 // supaya pencarian semantik ikut "melihat" isi balasan terbaru.
 
+import { assertActive } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { cloudinary } from "@/lib/cloudinary";
@@ -34,6 +35,9 @@ export async function POST(request) {
       return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
     }
 
+    const blocked = await assertActive(user.id);
+    if (blocked) return blocked;
+
     // ---- 2. Baca field: JSON (cara utama) atau multipart (cara lama) ----
     const isJson = (request.headers.get("content-type") || "").includes("application/json");
     let jsonBody = null;
@@ -55,6 +59,10 @@ export async function POST(request) {
     }
     if (!body) {
       return NextResponse.json({ error: "Isi balasan tidak boleh kosong." }, { status: 400 });
+    }
+
+    if (body.length > 3000) {
+      return NextResponse.json({ error: "Isi balasan maksimal 3000 karakter." }, { status: 400 });
     }
     if (images.length + direct.length > MAX_IMAGES) {
       return NextResponse.json({ error: `Maksimal ${MAX_IMAGES} gambar per balasan.` }, { status: 400 });

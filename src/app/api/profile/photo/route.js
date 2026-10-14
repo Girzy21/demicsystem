@@ -11,6 +11,7 @@
 //
 // Identitas selalu dari token Supabase, tidak pernah dari body request.
 
+import { assertActive } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { cloudinary } from "@/lib/cloudinary";
@@ -43,6 +44,9 @@ export async function POST(request) {
   try {
     const { user, error: authFail } = await getUser(request);
     if (authFail) return authFail;
+
+    const blocked = await assertActive(user.id);
+    if (blocked) return blocked;
 
     // ---- Cara utama: foto sudah diunggah langsung ke Cloudinary ----------
     if ((request.headers.get("content-type") || "").includes("application/json")) {

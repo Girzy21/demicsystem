@@ -7,6 +7,7 @@
 // resulting total count for that target so the frontend can reconcile
 // its optimistic update against the real server state.
 
+import { assertActive } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
@@ -32,6 +33,9 @@ export async function POST(request) {
     if (!userId) {
       return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
     }
+
+    const blocked = await assertActive(userId);
+    if (blocked) return blocked;
 
     const { postId, replyId } = await request.json();
     if (!postId && !replyId) {

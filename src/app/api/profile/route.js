@@ -8,6 +8,7 @@
 // Identitas diambil dari token Supabase (bukan dari body), jadi tidak mungkin
 // mengedit profil orang lain.
 
+import { assertActive } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
@@ -44,6 +45,9 @@ export async function PATCH(request) {
     if (authError || !user) {
       return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
     }
+
+    const blocked = await assertActive(user.id);
+    if (blocked) return blocked;
 
     const body = await request.json().catch(() => ({}));
     const update = {};

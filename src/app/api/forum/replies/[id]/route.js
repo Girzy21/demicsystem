@@ -8,6 +8,7 @@
 //           Setelah itu embedding thread diperbarui agar isi balasan yang
 //           sudah hilang tidak lagi memengaruhi hasil pencarian.
 
+import { assertActive } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { embedForumPost } from "@/lib/embeddings";
@@ -33,6 +34,9 @@ export async function PATCH(request, { params }) {
     const { id } = await params;
     const { user, error: authFail } = await getUser(request);
     if (authFail) return authFail;
+
+    const blocked = await assertActive(user.id);
+    if (blocked) return blocked;
 
     const body = await request.json().catch(() => ({}));
     const text = String(body.body || "").trim();

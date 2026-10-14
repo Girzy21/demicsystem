@@ -11,6 +11,7 @@
 //           besar, jadi aset Cloudinary-nya IKUT dihapus supaya kuota
 //           storage benar-benar kembali — bukan sekadar disembunyikan.
 
+import { assertActive } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { cloudinary } from "@/lib/cloudinary";
@@ -38,6 +39,9 @@ export async function PATCH(request, { params }) {
     const { id } = await params;
     const { user, error: authFail } = await getUser(request);
     if (authFail) return authFail;
+
+    const blocked = await assertActive(user.id);
+    if (blocked) return blocked;
 
     const body = await request.json().catch(() => ({}));
     const update = {};

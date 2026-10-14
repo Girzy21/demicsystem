@@ -14,6 +14,7 @@
 // Pola auth sama seperti /api/profile/photo: token Supabase diverifikasi
 // di server, bukan percaya username dari body request.
 
+import { assertActive } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { cloudinary } from "@/lib/cloudinary";
@@ -169,6 +170,9 @@ export async function POST(request) {
       return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
     }
 
+    const blocked = await assertActive(user.id);
+    if (blocked) return blocked;
+
     // ---- 2. Baca field: JSON (cara utama) atau multipart (cara lama) ----
     // Cara utama: gambar sudah diunggah LANGSUNG ke Cloudinary oleh browser
     // (anti batas 4,5 MB Vercel); body JSON hanya berisi { publicId } tiap gambar.
@@ -191,6 +195,10 @@ export async function POST(request) {
 
     if (!body) {
       return NextResponse.json({ error: "Isi post tidak boleh kosong." }, { status: 400 });
+    }
+
+    if (body.length > 5000) {
+      return NextResponse.json({ error: "Isi post maksimal 5000 karakter." }, { status: 400 });
     }
     if (images.length + direct.length > MAX_IMAGES) {
       return NextResponse.json({ error: `Maksimal ${MAX_IMAGES} gambar per post.` }, { status: 400 });

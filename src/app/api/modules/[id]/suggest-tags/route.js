@@ -12,6 +12,7 @@
 // hanya berubah bila isi file dibaca dengan izin DAN judul belum pernah
 // diubah (judul asli disimpan di original_title).
 
+import { assertActive, getAccess } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { runModuleTagging } from "@/lib/moduleTagging";
@@ -36,6 +37,19 @@ export async function POST(request, { params }) {
     } = await supabaseAdmin.auth.getUser(token);
     if (authError || !user) {
       return NextResponse.json({ error: "Sesi tidak valid — coba login ulang." }, { status: 401 });
+    }
+
+    const blocked = await assertActive(user.id);
+    if (blocked) return blocked;
+
+    // Hanya pengunggah modul (atau admin) yang boleh memicu analisis AI.
+    const { data: ownerRow } = await supabaseAdmin.from("modules").select("uploader_id").eq("id", id).maybeSingle();
+    if (!ownerRow) return NextResponse.json({ error: "Modul tidak ditemukan." }, { status: 404 });
+    if (ownerRow.uploader_id !== user.id) {
+      const access = await getAccess(user.id);
+      if (!access || !access.is_admin) {
+        return NextResponse.json({ error: "Hanya pengunggah modul yang bisa memicu analisis." }, { status: 403 });
+      }
     }
 
     const result = await runModuleTagging(id, { allowTitleChange: true });
