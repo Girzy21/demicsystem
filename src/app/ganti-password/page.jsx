@@ -5,6 +5,7 @@
 // supaya hanya kamu yang tahu password-nya. Wajib sudah login.
 
 import React, { useState, useEffect } from "react";
+import { SANS_STACK, HEADING_STACK, BRAND_NAME, W3Mark } from "@/app/brand";
 import { supabase } from "@/lib/supabaseClient";
 
 const CSS = `
@@ -22,6 +23,8 @@ const CSS = `
 .gp .err{color:var(--err)}
 .gp .ok{color:var(--ok)}
 .gp a{color:var(--blue);text-decoration:none}
+.gp-brand{display:flex;align-items:center;gap:9px;margin-bottom:16px;font-weight:700;font-size:16px;letter-spacing:-.2px}
+.gp-logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#2c7be5,#6fb3e8);display:flex;align-items:center;justify-content:center}
 `;
 
 export default function GantiPasswordPage() {
@@ -55,10 +58,11 @@ export default function GantiPasswordPage() {
   }
 
   return (
-    <div className="gp">
+    <div className="gp" style={{ fontFamily: SANS_STACK }}>
       <style>{CSS}</style>
       <div className="gp-card">
-        <h1>Ganti password</h1>
+        <div className="gp-brand"><span className="gp-logo"><W3Mark size={18} /></span><span style={{ fontFamily: HEADING_STACK }}>{BRAND_NAME}</span></div>
+        <h1 style={{ fontFamily: HEADING_STACK }}>Ganti password</h1>
         {!ready && <p>Memuat…</p>}
         {ready && !loggedIn && (
           <p>

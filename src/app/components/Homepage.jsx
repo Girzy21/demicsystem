@@ -1,3 +1,4 @@
+import { SANS_STACK, HEADING_STACK, BRAND_NAME, W3Mark } from "@/app/brand";
 import PeopleDirectory from "./PeopleDirectory";
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
@@ -3188,8 +3189,8 @@ export default function Homepage({ currentUsername, onLogout }) {
   const isSearching = search.trim().length > 0;
 
   // ---- design tokens (matches the auth page palette) -------------------------------------------------
-  const sans = "'Helvetica Neue', Arial, sans-serif";
-  const serif = "'Georgia', 'Iowan Old Style', serif";
+  const sans = SANS_STACK;
+  const serif = HEADING_STACK;
   const c = {
     bgFrom: "#EEF2F7",
     bgTo: "#D8E1EC",
@@ -3432,11 +3433,11 @@ function Sidebar({ ctx }) {
     <div style={{ width: 236, flexShrink: 0, background: c.sidebar, borderRight: `1px solid ${c.line}`, display: "flex", flexDirection: "column", padding: "24px 16px", boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "0 8px", marginBottom: 30 }}>
         <div style={{ width: 30, height: 30, borderRadius: 8, background: `linear-gradient(135deg, #2C7BE5, #6FB3E8)`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, color: "#fff", fontSize: 13, flexShrink: 0 }}>
-          ?
+          <W3Mark size={18} />
         </div>
         <span style={{ fontFamily: sans, fontWeight: 700, color: c.ink, fontSize: 13.5, letterSpacing: 0.2, lineHeight: 1.25 }}>
-          [Website Name] <br />
-          <span style={{ opacity: 0.45, fontWeight: 400, fontSize: 11 }}>placeholder</span>
+          <span style={{ fontFamily: HEADING_STACK, fontSize: 16, letterSpacing: -0.3 }}>{BRAND_NAME}</span> <br />
+          <span style={{ opacity: 0.45, fontWeight: 400, fontSize: 11 }}>academic ecosystem</span>
         </span>
       </div>
 
@@ -3935,7 +3936,7 @@ function SearchHub({ ctx }) {
             value={heroQuery}
             onChange={(e) => setHeroQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitHeroSearch(heroQuery)}
-            placeholder="e.g. learn about waves..."
+            placeholder="e.g. vector"
             style={{
               width: "100%",
               padding: "13px 16px 13px 42px",
@@ -5382,6 +5383,11 @@ function IdentityCard({ ctx, draftMode, profile, profileDraft, isOwnProfile, edi
           >
             Edit profil
           </button>
+        )}
+        {isOwnProfile && !editingProfile && (
+          <a href="/ganti-password" style={{ display: "block", marginTop: 10, textAlign: "center", fontFamily: sans, fontSize: 11.5, color: c.inkMuted, textDecoration: "none" }}>
+            Ganti password
+          </a>
         )}
       </div>
 

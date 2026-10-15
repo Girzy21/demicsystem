@@ -120,8 +120,7 @@ function PersonCard({ person, stats, isSelf, onOpen, c, sans, Avatar }) {
         <Stat value={stats.posts} label="Posts" c={c} sans={sans} />
         <Stat value={stats.replies} label="Replies" c={c} sans={sans} />
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: sans, fontSize: 11, color: c.inkFaint }}>
-        <span>{person.joined ? `Joined ${person.joined}` : ""}</span>
+      <div style={{ display: "flex", justifyContent: "flex-end", fontFamily: sans, fontSize: 11, color: c.inkFaint }}>
         <span style={{ color: c.blue, fontWeight: 600 }}>View profile →</span>
       </div>
     </div>

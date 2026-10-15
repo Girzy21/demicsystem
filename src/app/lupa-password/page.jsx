@@ -5,6 +5,7 @@
 // identitasmu lalu memberikan password baru secara langsung.
 
 import React, { useState } from "react";
+import { SANS_STACK, HEADING_STACK, BRAND_NAME, W3Mark } from "@/app/brand";
 
 const CSS = `
 .lp{--bg:#eef2f7;--card:#fff;--ink:#132038;--mute:#5b6b84;--line:rgba(19,32,56,.14);--blue:#2c7be5;--err:#d6336c;--ok:#2e9e6b;min-height:100vh;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px;color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -23,6 +24,8 @@ const CSS = `
 .lp .ok{color:var(--ok)}
 .lp a{color:var(--blue);text-decoration:none}
 .lp .hp{position:absolute;left:-9999px;opacity:0;height:0;width:0}
+.lp-brand{display:flex;align-items:center;gap:9px;margin-bottom:16px;font-weight:700;font-size:16px;letter-spacing:-.2px}
+.lp-logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#2c7be5,#6fb3e8);display:flex;align-items:center;justify-content:center}
 `;
 
 export default function LupaPasswordPage() {
@@ -53,10 +56,11 @@ export default function LupaPasswordPage() {
 
   const sent = result && result.kind === "ok";
   return (
-    <div className="lp">
+    <div className="lp" style={{ fontFamily: SANS_STACK }}>
       <style>{CSS}</style>
       <div className="lp-card">
-        <h1>Lupa password</h1>
+        <div className="lp-brand"><span className="lp-logo"><W3Mark size={18} /></span><span style={{ fontFamily: HEADING_STACK }}>{BRAND_NAME}</span></div>
+        <h1 style={{ fontFamily: HEADING_STACK }}>Lupa password</h1>
         <p>Kirim permintaan ke admin. Admin akan memverifikasi identitasmu lalu memberikan password baru secara langsung.</p>
         {!sent && (
           <>

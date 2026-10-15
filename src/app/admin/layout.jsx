@@ -1,6 +1,6 @@
 // Halaman admin tidak boleh diindeks mesin pencari.
 export const metadata = {
-  title: "Panel Admin",
+  title: "Panel Admin · w3study",
   robots: { index: false, follow: false },
 };
 

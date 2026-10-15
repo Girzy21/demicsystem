@@ -1,5 +1,6 @@
 "use client";
 
+import { SANS_STACK, HEADING_STACK, BRAND_NAME, W3Mark } from "@/app/brand";
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import Homepage from "@/app/components/Homepage";
@@ -227,7 +228,7 @@ function EyePeekPasswordField({
           border: `1px solid ${focused ? tone : "rgba(19,32,56,0.12)"}`,
           background: "rgba(19,32,56,0.045)",
           color: "#132038",
-          fontFamily: "'Helvetica Neue', Arial, sans-serif",
+          fontFamily: SANS_STACK,
           boxSizing: "border-box",
           outline: "none",
           transition: "border-color 0.15s",
@@ -302,7 +303,7 @@ function EyePeekPasswordField({
             right: eyeSize + 10,
             top: "50%",
             transform: "translateY(-50%)",
-            fontFamily: "'Helvetica Neue', Arial, sans-serif",
+            fontFamily: SANS_STACK,
             fontSize: 10.5,
             color: "#8C9AB1",
             pointerEvents: "none",
@@ -321,7 +322,7 @@ function EyePeekPasswordField({
             display: "inline-flex",
             alignItems: "center",
             gap: 5,
-            fontFamily: "'Helvetica Neue', Arial, sans-serif",
+            fontFamily: SANS_STACK,
             fontSize: 11,
             color: "#B24A30",
             background: "rgba(217,85,58,0.08)",
@@ -511,8 +512,8 @@ export default function App() {
   }
 
   // ---- design tokens (light / white theme) -------------------------------------------------
-  const sans = "'Helvetica Neue', Arial, sans-serif";
-  const serif = "'Georgia', 'Iowan Old Style', serif";
+  const sans = SANS_STACK;
+  const serif = HEADING_STACK;
   const c = {
     outer: "#E7ECF3",
     panelDark: "#F4F6FA",
@@ -622,10 +623,10 @@ export default function App() {
           fontSize: 13,
         }}
       >
-        ?
+        <W3Mark size={18} />
       </div>
       <span style={{ fontFamily: sans, fontWeight: 700, color: c.ink, fontSize: 14, letterSpacing: 0.2 }}>
-        [Nama Website] <span style={{ opacity: 0.45, fontWeight: 400 }}>· placeholder</span>
+        <span style={{ fontFamily: HEADING_STACK, fontSize: 17, letterSpacing: -0.3 }}>{BRAND_NAME}</span>
       </span>
     </div>
   );
@@ -650,7 +651,7 @@ export default function App() {
               animation: "pulse 1.4s ease-in-out infinite",
             }}
           >
-            ?
+            <W3Mark size={18} />
           </div>
           <span style={{ fontFamily: sans, fontSize: 12.5, color: c.inkMuted }}>Memuat...</span>
           <style>{`@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
@@ -707,6 +708,9 @@ export default function App() {
                     <input type="checkbox" checked={keepLoggedIn} onChange={(e) => setKeepLoggedIn(e.target.checked)} style={{ accentColor: c.blue }} />
                     Tetap masuk
                   </label>
+                  <a href="/lupa-password" style={{ fontFamily: sans, fontSize: 12, fontWeight: 600, color: c.blue, textDecoration: "none" }}>
+                    Lupa password?
+                  </a>
                 </div>
 
                 <button type="submit" style={primaryBtn(liSubmitting)} disabled={liSubmitting}>
@@ -714,9 +718,6 @@ export default function App() {
                 </button>
               </form>
 
-              <div style={{ marginTop: 16, padding: "10px 13px", background: c.blueSoft, borderRadius: 10, fontFamily: sans, fontSize: 11.5, color: c.inkMuted, border: `1px solid rgba(44,123,229,0.2)` }}>
-                Coba demo: username <strong style={{ color: c.ink }}>kuncipas</strong>, password <strong style={{ color: c.ink }}>demo123</strong>
-              </div>
             </>
           ) : (
             <>
