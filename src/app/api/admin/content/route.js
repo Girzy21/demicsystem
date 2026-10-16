@@ -66,14 +66,21 @@ export async function GET(request) {
       if (q) query = query.ilike("body", `%${q}%`);
       if (subject) query = query.eq("subject", subject);
     } else if (type === "reply") {
-      query = supabaseAdmin.from("replies").select("id, post_id, parent_id, author_id, body, images, created_at", { count: "exact" });
+      query = supabaseAdmin.from("replies").select("id, post_id, parent_id, author_id, body, images, created_at", { count: "exact" }).is("deleted_at", null);
       if (q) query = query.ilike("body", `%${q}%`);
     } else {
       return NextResponse.json({ error: "Jenis konten tidak dikenal." }, { status: 400 });
     }
     if (authorIds) query = query.in(authorCol, authorIds);
 
-    const { data, count, error } = await query.order("created_at", { ascending: false }).range(from, to);
+    let { data, count, error } = await query.order("created_at", { ascending: false }).range(from, to);
+    if (error && error.code === "42703" && type === "reply") {
+      // Kolom deleted_at belum ada (admin_setup_3.sql belum dijalankan): tampilkan tanpa penyaringan.
+      let retry = supabaseAdmin.from("replies").select("id, post_id, parent_id, author_id, body, images, created_at", { count: "exact" });
+      if (q) retry = retry.ilike("body", `%${q}%`);
+      if (authorIds) retry = retry.in(authorCol, authorIds);
+      ({ data, count, error } = await retry.order("created_at", { ascending: false }).range(from, to));
+    }
     if (error) {
       console.error("Gagal mengambil konten admin:", error);
       return NextResponse.json({ error: "Gagal mengambil konten." }, { status: 500 });

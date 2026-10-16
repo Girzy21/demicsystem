@@ -8,6 +8,7 @@
 //           (replies.post_id, likes, bookmarks -> posts.id) untuk membersihkan
 //           semua balasan, like, dan bookmark yang menempel.
 
+import { broadcast } from "@/lib/realtime";
 import { assertActive } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
@@ -155,6 +156,8 @@ export async function DELETE(request, { params }) {
       console.error("Gagal menghapus post:", deleteError);
       return NextResponse.json({ error: "Gagal menghapus post." }, { status: 500 });
     }
+
+    await Promise.all([broadcast("chat:" + id, "message", { kind: "gone" }), broadcast("forum:feed", "activity", { kind: "post" })]);
 
     return NextResponse.json({ success: true });
   } catch (err) {

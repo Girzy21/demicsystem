@@ -1,3 +1,5 @@
+import { sendOnEnter, sendOnEnterInput } from "./uxHelpers";
+import ChatRoom, { ChatPreviewStrip, ChatFeedSync } from "./ChatRoom";
 import { SANS_STACK, HEADING_STACK, BRAND_NAME, W3Mark } from "@/app/brand";
 import PeopleDirectory from "./PeopleDirectory";
 import React, { useState, useMemo, useRef, useEffect } from "react";
@@ -575,7 +577,7 @@ function canonicalTopic(subject, topic, extra) {
 // index below needs to look posts up by title — keeping the forum's own
 // data above the code that searches it keeps the read-order sane.
 const POST_TYPES = {
-  diskusi: { label: "Diskusi", icon: "💬", color: "#8A5CD9" },
+  diskusi: { label: "Diskusi Chat", icon: "💬", color: "#8A5CD9" },
   ide: { label: "Ide / Riset", icon: "💡", color: "#C9821E" },
   sharing: { label: "Sharing", icon: "📎", color: "#2E9E6B" },
   pertanyaan: { label: "Pertanyaan", icon: "❔", color: "#2C7BE5" },
@@ -752,7 +754,7 @@ function ModuleUploadComposer({
         ← Batal, kembali ke Bank Modul
       </button>
 
-      <div style={{ padding: "20px 22px", borderRadius: 16, background: c.card, border: `1px solid ${c.line}`, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div onKeyDown={sendOnEnterInput} style={{ padding: "20px 22px", borderRadius: 16, background: c.card, border: `1px solid ${c.line}`, display: "flex", flexDirection: "column", gap: 14 }}>
         <div>
           <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 6 }}>Judul modul</div>
           <input
@@ -953,6 +955,7 @@ function ModuleUploadComposer({
         </div>
 
         <button
+          data-send="1"
           disabled={!canSubmit}
           onClick={handleSubmit}
           style={{
@@ -1387,12 +1390,14 @@ function PostCard({ ctx, p, onOpen }) {
           {p.body}
         </div>
 
+        {p.postType === "diskusi" && <ChatPreviewStrip ctx={ctx} p={p} />}
+
         {p.module && <ModuleMentionChip ctx={ctx} module={p.module} />}
 
         {p.images.length > 0 && <ImageCarousel ctx={ctx} images={p.images} />}
         {p.attachment && <div style={{ marginTop: p.images.length ? 8 : 0 }}><AttachmentChip ctx={ctx} attachment={p.attachment} /></div>}
 
-        <ActionBar ctx={ctx} id={p.id} targetType="post" replyCountValue={countAllReplies(p.replies) + (localReplies[p.id] || []).length} onReplyClick={onOpen} />
+        <ActionBar ctx={ctx} id={p.id} targetType="post" replyCountValue={p.postType === "diskusi" ? (p.chat ? p.chat.count : 0) : countAllReplies(p.replies) + (localReplies[p.id] || []).length} onReplyClick={onOpen} />
       </div>
     </div>
   );
@@ -1650,9 +1655,10 @@ function NewPostComposer({ ctx }) {
             </div>
 
             <textarea
+              onKeyDown={sendOnEnter}
               value={draftBody}
               onChange={(e) => setDraftBody(e.target.value)}
-              placeholder="Apa yang lagi kamu pikirkan?"
+              placeholder={draftPostType === "diskusi" ? "Topik ruang chat — apa yang mau didiskusikan bareng?" : "Apa yang lagi kamu pikirkan?"}
               rows={4}
               style={{
                 width: "100%",
@@ -1678,6 +1684,7 @@ function NewPostComposer({ ctx }) {
                 <AttachPlaceholderButton ctx={ctx} />
               </div>
               <button
+                data-send="1"
                 disabled={!draftBody.trim()}
                 onClick={() => {
                   const body = draftBody.trim();
@@ -1712,7 +1719,7 @@ function NewPostComposer({ ctx }) {
               </button>
             </div>
             <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint, fontStyle: "italic", marginTop: 8 }}>
-              Subject & topik nanti opsional, dan bisa dilewati kalau diskusinya bersifat umum
+              Enter kirim, Shift+Enter baris baru. Tipe Diskusi Chat membuka ruang chat real-time untuk semua orang.
             </div>
           </div>
         </div>
@@ -1741,6 +1748,7 @@ function ReplyComposer({ ctx, postId, parentId, replyingToLabel, onCancel }) {
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <textarea
+            onKeyDown={sendOnEnter}
             value={replyDraft}
             onChange={(e) => setReplyDraft(e.target.value)}
             placeholder="Bagikan pendapat, tambahan, atau apapun yang relevan..."
@@ -1763,6 +1771,7 @@ function ReplyComposer({ ctx, postId, parentId, replyingToLabel, onCancel }) {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
             <AttachPlaceholderButton ctx={ctx} label="Lampirkan" />
             <button
+              data-send="1"
               disabled={!replyDraft.trim()}
               onClick={() => {
                 const body = replyDraft.trim();
@@ -1898,6 +1907,7 @@ function ThreadDetail({ ctx, post }) {
   const allReplies = [...post.replies, ...(localReplies[post.id] || [])];
   const topLevelReplies = allReplies.filter((r) => r.parentId === null);
   const total = countAllReplies(allReplies);
+  const [showComments, setShowComments] = useState(true);
   const pendingForThisPost = pendingReplies.filter((r) => r.postId === post.id);
   return (
     <div style={{ padding: "0 32px" }}>
@@ -1978,8 +1988,17 @@ function ThreadDetail({ ctx, post }) {
         <span style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: c.ink }}>
           {total} {total === 1 ? "Balasan" : "Balasan"}
         </span>
+        <button
+          onClick={() => setShowComments(!showComments)}
+          aria-expanded={showComments}
+          style={{ marginLeft: "auto", background: "none", border: `1px solid ${c.line}`, borderRadius: 999, padding: "4px 12px", fontFamily: sans, fontSize: 11.5, fontWeight: 700, color: c.inkMuted, cursor: "pointer" }}
+        >
+          {showComments ? "Sembunyikan balasan" : `Tampilkan balasan (${total})`}
+        </button>
       </div>
 
+      {showComments ? (
+        <>
       {pendingForThisPost.map((pending) => (
         <PendingReplyCard key={pending.tempId} ctx={ctx} pending={pending} />
       ))}
@@ -1994,6 +2013,12 @@ function ThreadDetail({ ctx, post }) {
           {topLevelReplies.map((r) => (
             <ReplyNode key={r.id} ctx={ctx} reply={r} allReplies={allReplies} depth={0} postId={post.id} />
           ))}
+        </div>
+      )}
+        </>
+      ) : (
+        <div style={{ padding: "14px 18px", borderRadius: 12, border: `1px dashed ${c.line}`, background: c.card, fontFamily: sans, fontSize: 12, color: c.inkFaint, textAlign: "center" }}>
+          {total} balasan disembunyikan
         </div>
       )}
     </div>
@@ -2736,7 +2761,7 @@ export default function Homepage({ currentUsername, onLogout }) {
         data: { session },
       } = await supabase.auth.getSession();
       if (!session) return;
-      const res = await fetch("/api/forum/posts", {
+      const res = await fetch("/api/forum/feed", {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const result = await res.json();
@@ -2779,6 +2804,7 @@ export default function Homepage({ currentUsername, onLogout }) {
           edited: !!p.editedAt,
           moduleId: p.moduleId || null,
           module: p.module || null,
+          chat: p.chat || null,
           bookmarkedByMe: false,
           replies: [],
         };
@@ -3367,7 +3393,7 @@ export default function Homepage({ currentUsername, onLogout }) {
     modulesInView, isSearching,
     viewedProfile, setViewedProfile, editingProfile, setEditingProfile,
     profileDraft, setProfileDraft,
-    openProfile, startEditingProfile, cancelEditingProfile, saveProfile, avatarFor,
+    openProfile, startEditingProfile, cancelEditingProfile, saveProfile, avatarFor, setLocalPosts, fetchForumFeed,
     photoUploading, photoUploadError, uploadProfilePhoto, deleteProfilePhoto,
     tagInputQueries, setTagInputQueries,
     forumAccent,
@@ -4572,8 +4598,16 @@ function ForumSection({ ctx }) {
 
   if (composingPost) return <NewPostComposer ctx={forumCtx} />;
   const openPost = openPostId ? localPosts.find((p) => p.id === openPostId) : null;
+  if (openPost && openPost.postType === "diskusi") {
+    return <ChatRoom ctx={forumCtx} post={openPost} UsernameAvatar={UsernameAvatar} uploadDirectToCloudinary={uploadDirectToCloudinary} />;
+  }
   if (openPost) return <ThreadDetail ctx={forumCtx} post={openPost} />;
-  return <PostList ctx={forumCtx} />;
+  return (
+    <>
+      <ChatFeedSync ctx={ctx} />
+      <PostList ctx={forumCtx} />
+    </>
+  );
 }
 
 // ---- activity feed (its own section, separate from Beranda) -------------------------------------------------
@@ -5478,7 +5512,7 @@ function ProfileView({ ctx, profile, isOwnProfile, editingProfile, setLightboxAv
 function ProfileEdit({ ctx, profileDraft, setLightboxAvatar, setShowQuestionnaire, setQuestionnaireSession }) {
   const { c, sans, inputStyle, forumAccent, setProfileDraft, saveProfile, cancelEditingProfile } = ctx;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 24, alignItems: "start" }}>
+    <div onKeyDown={sendOnEnterInput} style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 24, alignItems: "start" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <IdentityCard ctx={ctx} draftMode={true} profileDraft={profileDraft} isOwnProfile={true} editingProfile={true} setLightboxAvatar={setLightboxAvatar} />
         <div style={{ padding: "16px 18px", borderRadius: 16, background: c.panel }}>
@@ -5578,6 +5612,7 @@ function ProfileEdit({ ctx, profileDraft, setLightboxAvatar, setShowQuestionnair
 
         <div style={{ display: "flex", gap: 10, position: "sticky", bottom: 0, paddingTop: 4 }}>
           <button
+            data-send="1"
             onClick={saveProfile}
             style={{ padding: "11px 24px", borderRadius: 999, border: "none", background: c.blue, color: "#fff", fontFamily: sans, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
           >
@@ -5618,7 +5653,7 @@ function InlineTextEditor({ ctx, initial, multiline, maxLength, saving, placehol
   return (
     <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {multiline ? (
-        <textarea rows={3} autoFocus value={value} maxLength={maxLength} placeholder={placeholder} onChange={(e) => setValue(e.target.value)} style={fieldStyle} />
+        <textarea rows={3} autoFocus value={value} maxLength={maxLength} placeholder={placeholder} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !(e.nativeEvent && e.nativeEvent.isComposing)) { e.preventDefault(); if (trimmed && !unchanged && !saving) onSave(trimmed); } else if (e.key === "Escape") onCancel(); }} style={fieldStyle} />
       ) : (
         <input
           autoFocus
@@ -5685,6 +5720,7 @@ function PostEditor({ ctx, post, saving, onSave, onCancel }) {
         value={body}
         maxLength={5000}
         onChange={(e) => setBody(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !(e.nativeEvent && e.nativeEvent.isComposing)) { e.preventDefault(); if (!saving && trimmed && !unchanged) onSave({ body: trimmed, postType, moduleId: moduleChanged ? moduleId : undefined }); } else if (e.key === "Escape") onCancel(); }}
         style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: `1px solid ${c.line}`, background: c.fieldBg, fontFamily: sans, fontSize: 13.5, lineHeight: 1.55, color: c.ink, outline: "none", resize: "vertical" }}
       />
       <div style={{ display: "flex", gap: 6 }}>

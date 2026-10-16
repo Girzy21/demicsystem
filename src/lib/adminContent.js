@@ -9,6 +9,9 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { embedForumPost } from "@/lib/embeddings";
 import { CURRENT_AI_ANALYSIS_VERSION } from "@/lib/moduleTagging";
 import { logAdminAction, destroyAsset, destroyImageUrls, moduleResourceType } from "@/lib/adminAuth";
+import { broadcast, chatTopic, FEED_TOPIC } from "@/lib/realtime";
+
+const DELETED_BODY = "(pesan dihapus)";
 
 const clip = (s, n = 600) => (typeof s === "string" && s.length > n ? `${s.slice(0, n)}…` : s);
 
@@ -77,6 +80,8 @@ export async function deletePostById(id, { admin, reason, audit = true }) {
     return { ok: false, error: "Gagal menghapus post." };
   }
   await destroyImageUrls([...(p.images || []), ...(replies || []).flatMap((r) => r.images || [])]);
+  // Ruang chat yang sedang terbuka perlu tahu bahwa post-nya hilang; daftar forum ikut disegarkan.
+  await Promise.all([broadcast(chatTopic(id), "message", { kind: "gone" }), broadcast(FEED_TOPIC, "activity", { kind: "post" })]);
   return { ok: true };
 }
 
@@ -89,6 +94,30 @@ export async function deleteReplyById(id, { admin, reason, audit = true, reembed
     .maybeSingle();
   if (error) return { ok: false, error: "Gagal membaca balasan." };
   if (!r) return { ok: false, error: "Balasan tidak ditemukan." };
+
+  // Pesan "Diskusi Chat": jangan hapus baris (cascade akan ikut menghapus pesan yang mengutipnya).
+  const { data: roomPost } = await supabaseAdmin.from("posts").select("post_type").eq("id", r.post_id).maybeSingle();
+  if (roomPost && roomPost.post_type === "diskusi") {
+    if (audit) {
+      const logged = await logAdminAction(admin, {
+        action: "reply.delete",
+        targetType: "reply",
+        targetId: id,
+        targetLabel: clip(r.body, 80),
+        reason,
+        snapshot: { reply: { ...r, body: clip(r.body, 2000) }, chat: true },
+      });
+      if (!logged) return { ok: false, error: "Audit log gagal — aksi dibatalkan." };
+    }
+    const { error: softErr } = await supabaseAdmin.from("replies").update({ body: DELETED_BODY, images: [], deleted_at: new Date().toISOString() }).eq("id", id);
+    if (softErr) {
+      console.error("Gagal menghapus pesan chat:", softErr);
+      return { ok: false, error: softErr.code === "42703" ? "Database belum siap. Sudah menjalankan admin_setup_3.sql?" : "Gagal menghapus pesan." };
+    }
+    await destroyImageUrls(r.images || []);
+    await Promise.all([broadcast(chatTopic(r.post_id), "message", { kind: "delete", id }), broadcast(FEED_TOPIC, "activity", { kind: "chat", postId: r.post_id })]);
+    return { ok: true, postId: r.post_id, chat: true };
+  }
 
   const { data: siblings } = await supabaseAdmin.from("replies").select("id, parent_id, author_id, body, images").eq("post_id", r.post_id).limit(5000);
   const nested = descendantsOf(r.id, siblings || []);

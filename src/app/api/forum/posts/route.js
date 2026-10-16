@@ -14,6 +14,7 @@
 // Pola auth sama seperti /api/profile/photo: token Supabase diverifikasi
 // di server, bukan percaya username dari body request.
 
+import { broadcast } from "@/lib/realtime";
 import { assertActive } from "@/lib/adminAuth";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
@@ -278,6 +279,7 @@ export async function POST(request) {
     // Tidak pernah melempar error: kalau gagal, post tetap tersimpan dan
     // embedding-nya bisa diisi nanti lewat endpoint backfill.
     await embedForumPost(post.id);
+    await broadcast("forum:feed", "activity", { kind: "post", postId: post.id });
 
     // Kolom embedding tidak ikut dikirim balik ke browser.
     const { embedding, ...postForClient } = post;
