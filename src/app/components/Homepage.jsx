@@ -1,3 +1,4 @@
+import BrandTitle from "./BrandTitle";
 import { sendOnEnter, sendOnEnterInput } from "./uxHelpers";
 import ChatRoom, { ChatPreviewStrip, ChatFeedSync } from "./ChatRoom";
 import { SANS_STACK, HEADING_STACK, BRAND_NAME, W3Mark } from "@/app/brand";
@@ -3407,7 +3408,6 @@ export default function Homepage({ currentUsername, onLogout }) {
         <TopBar ctx={ctx} />
         {activeNav === "home" && (
           <div style={{ paddingBottom: 32 }}>
-            <AiEthicsBanner ctx={ctx} />
             <SearchHub ctx={ctx} />
           </div>
         )}
@@ -3561,7 +3561,7 @@ function TopBar({ ctx }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 32px 16px", flexShrink: 0, gap: 20 }}>
       <div style={{ minWidth: 0 }}>
-        <h1 style={{ fontFamily: serif, fontSize: 22, color: c.ink, margin: 0 }}>{copy.title}</h1>
+        {activeNav === "home" ? <BrandTitle ctx={ctx} /> : <h1 style={{ fontFamily: serif, fontSize: 22, color: c.ink, margin: 0 }}>{copy.title}</h1>}
         <p style={{ fontFamily: sans, fontSize: 12.5, color: c.inkMuted, margin: "4px 0 0" }}>{copy.subtitle}</p>
       </div>
       {activeNav !== "home" && activeNav !== "profile" && activeNav !== "people" && (
@@ -3843,14 +3843,14 @@ function HowItWorks({ ctx }) {
 // top of the homepage. Two-tier disclosure: a short always-visible summary
 // plus an expandable "Selengkapnya" section, so it's informative without
 // forcing everyone to read a wall of text just to get to the search bar.
-function AiEthicsBanner({ ctx }) {
+function AiEthicsBanner({ ctx, embedded }) {
   const { c, sans, showAiEthicsBanner, setShowAiEthicsBanner } = ctx;
   const [expanded, setExpanded] = useState(false);
 
   if (!showAiEthicsBanner) return null;
 
   return (
-    <div style={{ padding: "6px 32px 0" }}>
+    <div style={{ padding: embedded ? 0 : "6px 32px 0" }}>
       <div style={{ borderRadius: 16, background: c.appliedSoft, border: `1px solid ${c.appliedAccent}30`, padding: "16px 18px", marginBottom: 14, position: "relative" }}>
         <button
           onClick={() => setShowAiEthicsBanner(false)}
@@ -4032,6 +4032,8 @@ function SearchHub({ ctx }) {
           </>
         )}
       </div>
+
+      <AiEthicsBanner ctx={ctx} embedded />
 
       {/* results */}
       {hasQuery && (heroSearching || !heroResults) && (

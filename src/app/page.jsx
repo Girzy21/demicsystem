@@ -1,5 +1,6 @@
 "use client";
 
+import CrystalizedBall from "./components/CrystalizedBall";
 import { SANS_STACK, HEADING_STACK, BRAND_NAME, W3Mark } from "@/app/brand";
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
@@ -801,7 +802,11 @@ export default function App() {
               padding: 26,
             }}
           >
-            {/* decorative glow accents, in place of a real video/image */}
+            {/* Animasi: CrystalizedBall */}
+            <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+              <CrystalizedBall preset="abyss" color="#2C7BE5" theme="light" size={0.74} />
+            </div>
+            {/* decorative glow accents */}
             <div style={{ position: "absolute", top: -60, right: -60, width: 220, height: 220, borderRadius: "50%", background: "radial-gradient(circle, rgba(44,123,229,0.18), transparent 70%)" }} />
             <div style={{ position: "absolute", bottom: -80, left: -40, width: 260, height: 260, borderRadius: "50%", background: "radial-gradient(circle, rgba(44,123,229,0.14), transparent 70%)" }} />
 
@@ -821,24 +826,10 @@ export default function App() {
                   marginBottom: 16,
                 }}
               >
-                ▶ Slot video
+                ✦ w3study
               </div>
-              <h2 style={{ fontFamily: serif, fontSize: 26, color: c.ink, margin: "0 0 8px", lineHeight: 1.25 }}>
-                Belajar bareng, tanpa canggung.
-              </h2>
-              <p style={{ fontFamily: sans, fontSize: 13, color: "rgba(19,32,56,0.65)", maxWidth: 320, lineHeight: 1.6 }}>
-                Ganti area ini dengan tag <code style={{ background: "rgba(19,32,56,0.08)", padding: "1px 5px", borderRadius: 4 }}>&lt;video&gt;</code> kamu nanti — sekarang masih placeholder visual.
-              </p>
             </div>
 
-            <div style={{ position: "relative", zIndex: 1, display: "flex", gap: 10 }}>
-              <div style={{ width: 38, height: 38, borderRadius: "50%", background: "rgba(255,255,255,0.75)", display: "flex", alignItems: "center", justifyContent: "center", color: c.ink, fontSize: 16, cursor: "pointer" }}>
-                ‹
-              </div>
-              <div style={{ width: 38, height: 38, borderRadius: "50%", background: c.blue, display: "flex", alignItems: "center", justifyContent: "center", color: c.white, fontSize: 16, cursor: "pointer" }}>
-                ›
-              </div>
-            </div>
           </div>
         </div>
       </div>
