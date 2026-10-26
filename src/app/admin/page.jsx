@@ -104,7 +104,14 @@ async function runLoop(step, onProgress, extra = {}) {
   return { done: false, stalled: true };
 }
 
-const fmt = (d) => (d ? new Date(d).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }) : "-");
+const fmt = (d) => {
+  if (!d) return "-";
+  try {
+    return new Date(d).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" });
+  } catch {
+    return String(d);
+  }
+};
 const snip = (s, n = 140) => {
   const t = String(s || "").replace(/\s+/g, " ").trim();
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
@@ -123,7 +130,8 @@ function fmtBytes(n) {
 function randomPassword() {
   const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
   const arr = new Uint32Array(12);
-  crypto.getRandomValues(arr);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(arr);
+  else for (let i = 0; i < arr.length; i += 1) arr[i] = Math.floor(Math.random() * 4294967296);
   return Array.from(arr, (n) => chars[n % chars.length]).join("");
 }
 
@@ -142,6 +150,49 @@ function useLoad(path) {
   }, [path, tick]);
   const reload = useCallback(() => setTick((t) => t + 1), []);
   return { ...state, reload };
+}
+
+// -------------------------------------------- penangkap error (per tab)
+// Kalau satu tab gagal dirender, hanya tab itu yang menampilkan pesan error
+// (lengkap dengan detailnya); bagian panel lain tetap berfungsi.
+class TabBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("Panel admin - error di tab:", error, info && info.componentStack);
+  }
+
+  componentDidUpdate(prev) {
+    if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null });
+  }
+
+  render() {
+    const e = this.state.error;
+    if (!e) return this.props.children;
+    const detail = [String((e && e.message) || e), ...String((e && e.stack) || "").split("\n").slice(1, 7)].join("\n");
+    return (
+      <div className="adm-card">
+        <b style={{ color: "var(--danger)" }}>Bagian ini gagal ditampilkan</b>
+        <p className="adm-mute">Tab lain tetap bisa dipakai. Kirim teks di bawah ini ke pengembang agar bisa diperbaiki:</p>
+        <div className="adm-pre">{detail}</div>
+        <div className="adm-bar" style={{ marginTop: 10 }}>
+          <button className="adm-btn" onClick={() => this.setState({ error: null })}>
+            Coba lagi
+          </button>
+          <button className="adm-btn" onClick={() => window.location.reload()}>
+            Muat ulang halaman
+          </button>
+        </div>
+      </div>
+    );
+  }
 }
 
 // ------------------------------------------------------- small components
@@ -1163,6 +1214,7 @@ function ResetModal({ req, onClose, onDone, notify }) {
 function ResetTab({ notify }) {
   const [mode, setMode] = useState("pending");
   const { data, loading, error, reload } = useLoad(`password-requests?status=${mode}`);
+  const items = data && Array.isArray(data.items) ? data.items : [];
   const [resetting, setResetting] = useState(null);
   const [rejecting, setRejecting] = useState(null);
 
@@ -1185,7 +1237,7 @@ function ResetTab({ notify }) {
       {loading && <p className="adm-mute">Memuat…</p>}
       {error && <p className="adm-err">{error}</p>}
       <div className="adm-card">
-        {((data && data.items) || []).map((r) => (
+        {items.map((r) => (
           <div key={r.id} className="adm-row">
             <div className="main">
               <b>@{r.username}</b> {r.realName && <span className="adm-mute">({r.realName})</span>}{" "}
@@ -1212,7 +1264,7 @@ function ResetTab({ notify }) {
             )}
           </div>
         ))}
-        {data && data.items.length === 0 && <p className="adm-mute">Tidak ada permintaan.</p>}
+        {data && items.length === 0 && <p className="adm-mute">Tidak ada permintaan.</p>}
       </div>
       {resetting && <ResetModal req={resetting} onClose={() => setResetting(null)} onDone={reload} notify={notify} />}
       {rejecting && <ReasonModal title="Tolak permintaan" text={`Tolak permintaan reset password dari @${rejecting.username}?`} confirmText="Tolak" onConfirm={doReject} onClose={() => setRejecting(null)} />}
@@ -1315,7 +1367,7 @@ function AuditTab() {
       {loading && <p className="adm-mute">Memuat…</p>}
       {error && <p className="adm-err">{error}</p>}
       <div className="adm-card">
-        {((data && data.items) || []).map((e) => (
+        {(data && Array.isArray(data.items) ? data.items : []).map((e) => (
           <div key={e.id} className="adm-row" style={{ display: "block" }}>
             <div style={{ cursor: "pointer" }} onClick={() => toggle(e.id)}>
               <Badge>{e.action}</Badge> <b>{e.target_label || e.target_id || "-"}</b>
@@ -1327,7 +1379,7 @@ function AuditTab() {
             {openId === e.id && <div className="adm-pre" style={{ marginTop: 6 }}>{detail ? JSON.stringify(detail.snapshot ?? detail, null, 2) : "Memuat…"}</div>}
           </div>
         ))}
-        {data && data.items.length === 0 && <p className="adm-mute">Belum ada catatan.</p>}
+        {data && Array.isArray(data.items) && data.items.length === 0 && <p className="adm-mute">Belum ada catatan.</p>}
       </div>
       {data && <Pager page={page} total={data.total} size={data.size} onPage={setPage} />}
     </>
@@ -1335,7 +1387,7 @@ function AuditTab() {
 }
 
 // ------------------------------------------------------------- Halaman
-export default function AdminPage() {
+function AdminShell() {
   const [phase, setPhase] = useState("loading");
   const [me, setMe] = useState(null);
   const [tab, setTab] = useState("overview");
@@ -1439,6 +1491,7 @@ export default function AdminPage() {
         ))}
       </div>
       <div className="adm-main">
+        <TabBoundary resetKey={tab}>
         {tab === "overview" && <OverviewTab setTab={setTab} />}
         {tab === "content" && <ContentTab notify={notify} />}
         {tab === "review" && <ReviewTab notify={notify} />}
@@ -1447,8 +1500,17 @@ export default function AdminPage() {
         {tab === "resets" && <ResetTab notify={notify} />}
         {tab === "maintenance" && <MaintenanceTab notify={notify} />}
         {tab === "audit" && <AuditTab />}
+        </TabBoundary>
       </div>
       {toast && <div className={`adm-toast${toast.kind === "err" ? " err" : ""}`}>{toast.msg}</div>}
     </div>
+  );
+}
+
+export default function AdminPage() {
+  return (
+    <TabBoundary resetKey="root">
+      <AdminShell />
+    </TabBoundary>
   );
 }
