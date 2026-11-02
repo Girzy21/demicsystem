@@ -71,6 +71,39 @@ const CSS = `
 `;
 
 // ---------------------------------------------------------------- helpers
+// Catatan bentuk respons API terakhir (HANYA struktur: jenis & panjang, tanpa isi),
+// ditampilkan di kotak error agar penyebab crash mudah ditelusuri.
+const apiLog = [];
+
+function shapeOf(v) {
+  if (v === null) return "null";
+  if (Array.isArray(v)) {
+    const nulls = v.map((x, i) => (x === null || x === undefined ? i : -1)).filter((i) => i >= 0);
+    return `array(${v.length})${nulls.length ? ` ADA-NULL@${nulls.slice(0, 5).join(",")}` : ""}`;
+  }
+  if (typeof v === "object") {
+    return `{${Object.keys(v)
+      .slice(0, 12)
+      .map((k) => `${k}:${Array.isArray(v[k]) ? shapeOf(v[k]) : v[k] === null ? "null" : typeof v[k]}`)
+      .join(", ")}}`;
+  }
+  return typeof v;
+}
+
+// Daftar yang dikirim API tidak boleh memuat null/undefined (baris kosong membuat tab crash).
+const LIST_KEYS = ["items", "users", "topics", "replies", "messages"];
+function cleanLists(json) {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return json;
+  const out = { ...json };
+  for (const k of LIST_KEYS) {
+    if (!Array.isArray(out[k])) continue;
+    const kept = out[k].filter((x) => x !== null && x !== undefined);
+    if (kept.length !== out[k].length) console.warn(`Panel admin: ${out[k].length - kept.length} baris kosong (null) dibuang dari daftar "${k}" yang dikirim server.`);
+    out[k] = kept;
+  }
+  return out;
+}
+
 async function api(path, { method = "GET", body } = {}) {
   const {
     data: { session },
@@ -83,8 +116,10 @@ async function api(path, { method = "GET", body } = {}) {
     cache: "no-store",
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(json.error || `Error ${res.status}`), { status: res.status, code: json.code });
-  return json;
+  apiLog.push(`${method} ${path} -> ${res.status} ${shapeOf(json)}`);
+  if (apiLog.length > 4) apiLog.shift();
+  if (!res.ok) throw Object.assign(new Error((json && json.error) || `Error ${res.status}`), { status: res.status, code: json && json.code });
+  return cleanLists(json);
 }
 
 // Mengulang satu langkah maintenance (satu batch per panggilan) sampai selesai.
@@ -176,7 +211,14 @@ class TabBoundary extends React.Component {
   render() {
     const e = this.state.error;
     if (!e) return this.props.children;
-    const detail = [String((e && e.message) || e), ...String((e && e.stack) || "").split("\n").slice(1, 7)].join("\n");
+    const detail = [
+      `Tab: ${this.props.resetKey}`,
+      String((e && e.message) || e),
+      ...String((e && e.stack) || "").split("\n").slice(1, 5),
+      "",
+      "Respons API terakhir (hanya struktur, tanpa isi):",
+      ...(apiLog.length ? apiLog : ["(belum ada)"]),
+    ].join("\n");
     return (
       <div className="adm-card">
         <b style={{ color: "var(--danger)" }}>Bagian ini gagal ditampilkan</b>
@@ -576,7 +618,7 @@ function ThreadModal({ postId, onClose, onChanged, notify }) {
   }
 
   const depth = {};
-  const replies = (data && data.replies) || [];
+  const replies = ((data && data.replies) || []).filter(Boolean);
   for (const r of replies) depth[r.id] = r.parent_id && depth[r.parent_id] !== undefined ? Math.min(depth[r.parent_id] + 1, 4) : 0;
 
   return (
