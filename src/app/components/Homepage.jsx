@@ -193,13 +193,6 @@ const NAV_ITEMS = [
 // CAS (Creativity, Activity, Service) is an IB DP core component, not a
 // subject with a syllabus — its "topics" are the three CAS strands plus the
 // CAS Project.
-//
-// Philosophy isn't taught at school yet, so it isn't a real subject folder
-// with a syllabus either — it's kept here as a lightweight space purely for
-// sharing readings, thoughts, and discussion, not official course material.
-// Its topics reflect that (broad themes, not curriculum units), and modules
-// filed under it are tagged as shares rather than study material (see
-// MODULES below).
 const FOLDER_TREE = {
   Physics: ["Mechanics", "Waves & Oscillation", "Thermal Physics", "Electricity & Magnetism"],
   Chemistry: ["Organic Chemistry", "Atomic Structure", "Equilibrium", "Acids & Bases"],
@@ -217,7 +210,6 @@ const FOLDER_TREE = {
   History: ["Cold War", "Authoritarian States", "Independence Movements"],
   TOK: ["Knowledge Questions", "Essay Prep", "Exhibition"],
   CAS: ["Creativity", "Activity", "Service", "CAS Project"],
-  Philosophy: ["Bacaan & Renungan", "Etika Sehari-hari", "Obrolan Filosofis"],
 };
 
 const SUBJECT_ORDER = Object.keys(FOLDER_TREE);
@@ -4108,6 +4100,7 @@ function SearchHub({ ctx }) {
               )}
             </>
           )}
+          <AiEthicsBanner ctx={ctx} embedded />
         </div>
       )}
     </div>

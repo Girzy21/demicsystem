@@ -606,14 +606,16 @@ function ThreadModal({ postId, onClose, onChanged, notify }) {
   const { data, loading, error, reload } = useLoad(`content?type=thread&id=${encodeURIComponent(postId)}`);
   const [confirm, setConfirm] = useState(null);
 
-  async function doDelete(reason) {
-    const r = await api("content", { method: "POST", body: { action: "delete", items: [{ type: confirm.type, id: confirm.id }], reason } });
+  // `target` dikirim sebagai ARGUMEN (bukan dibaca dari state `confirm` yang awalnya null):
+  // build produksi dengan React Compiler membaca properti state di luar fungsi dan akan crash.
+  async function doDelete(target, reason) {
+    const r = await api("content", { method: "POST", body: { action: "delete", items: [{ type: target.type, id: target.id }], reason } });
     const res = r.results[0];
     if (!res.ok) throw new Error(res.error || "Gagal menghapus.");
     notify("Terhapus.");
     setConfirm(null);
     onChanged();
-    if (confirm.type === "post") onClose();
+    if (target.type === "post") onClose();
     else reload();
   }
 
@@ -655,7 +657,7 @@ function ThreadModal({ postId, onClose, onChanged, notify }) {
           {replies.length === 0 && <p className="adm-mute">Belum ada balasan.</p>}
         </>
       )}
-      {confirm && <ReasonModal title="Hapus permanen" text={`Hapus ${confirm.label}? Tindakan ini tidak bisa dibatalkan (snapshot tersimpan di audit log).`} onConfirm={doDelete} onClose={() => setConfirm(null)} />}
+      {confirm && <ReasonModal title="Hapus permanen" text={`Hapus ${confirm.label}? Tindakan ini tidak bisa dibatalkan (snapshot tersimpan di audit log).`} onConfirm={(reason) => doDelete(confirm, reason)} onClose={() => setConfirm(null)} />}
     </Modal>
   );
 }
@@ -1253,19 +1255,23 @@ function ResetModal({ req, onClose, onDone, notify }) {
   );
 }
 
+// `req` selalu ada di sini (komponen hanya dirender saat ada permintaan yang dipilih).
+function RejectModal({ req, onClose, onDone, notify }) {
+  async function go(reason) {
+    await api(`password-requests/${req.id}`, { method: "POST", body: { action: "reject", reason } });
+    notify("Permintaan ditolak.");
+    onDone();
+    onClose();
+  }
+  return <ReasonModal title="Tolak permintaan" text={`Tolak permintaan reset password dari @${req.username}?`} confirmText="Tolak" onConfirm={go} onClose={onClose} />;
+}
+
 function ResetTab({ notify }) {
   const [mode, setMode] = useState("pending");
   const { data, loading, error, reload } = useLoad(`password-requests?status=${mode}`);
   const items = data && Array.isArray(data.items) ? data.items : [];
   const [resetting, setResetting] = useState(null);
   const [rejecting, setRejecting] = useState(null);
-
-  async function doReject(reason) {
-    await api(`password-requests/${rejecting.id}`, { method: "POST", body: { action: "reject", reason } });
-    notify("Permintaan ditolak.");
-    setRejecting(null);
-    reload();
-  }
 
   return (
     <>
@@ -1309,7 +1315,7 @@ function ResetTab({ notify }) {
         {data && items.length === 0 && <p className="adm-mute">Tidak ada permintaan.</p>}
       </div>
       {resetting && <ResetModal req={resetting} onClose={() => setResetting(null)} onDone={reload} notify={notify} />}
-      {rejecting && <ReasonModal title="Tolak permintaan" text={`Tolak permintaan reset password dari @${rejecting.username}?`} confirmText="Tolak" onConfirm={doReject} onClose={() => setRejecting(null)} />}
+      {rejecting && <RejectModal req={rejecting} onClose={() => setRejecting(null)} onDone={reload} notify={notify} />}
     </>
   );
 }

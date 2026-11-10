@@ -107,31 +107,6 @@ function UsernameAvatar({ username, size = 40 }) {
   );
 }
 
-function PasswordStrength({ password }) {
-  const score = useMemo(() => {
-    if (!password) return 0;
-    let s = 0;
-    if (password.length >= 8) s++;
-    if (password.length >= 12) s++;
-    if (/[0-9]/.test(password)) s++;
-    if (/[^a-zA-Z0-9]/.test(password)) s++;
-    if (/[a-z]/.test(password) && /[A-Z]/.test(password)) s++;
-    return Math.min(s, 4);
-  }, [password]);
-  const labels = ["Terlalu pendek", "Lemah", "Cukup", "Kuat", "Sangat kuat"];
-  const colors = ["#A8B4C4", "#D9704F", "#C99A2E", "#2E9E6B", "#2C7BE5"];
-  if (!password) return null;
-  return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} style={{ height: 3, flex: 1, borderRadius: 2, background: i < score ? colors[score] : "rgba(10,25,48,0.09)", transition: "background 0.2s" }} />
-        ))}
-      </div>
-      <span style={{ fontSize: 11.5, color: colors[score] }}>{labels[score]}</span>
-    </div>
-  );
-}
 
 // ---- interactive "peeking eye" password field -------------------------------------------------
 // Bukan sekadar ikon mata statis: mata SVG ini benar-benar hidup — pupilnya
@@ -750,7 +725,6 @@ export default function App() {
                     revealed={suPasswordsRevealed}
                     onToggleReveal={() => setSuPasswordsRevealed((r) => !r)}
                   />
-                  <PasswordStrength password={suPassword} />
                   {suErrors.password && <div style={errorStyle}>{suErrors.password}</div>}
                 </div>
 
