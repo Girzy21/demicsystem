@@ -2333,6 +2333,7 @@ export default function Homepage({ currentUsername, onLogout }) {
       tags: row.tags || [],
       isExercise: !!row.is_exercise,
       exerciseSetBy: row.exercise_set_by || "user",
+      sortOrder: typeof row.sort_order === "number" ? row.sort_order : null,
     };
   }
 
@@ -3165,7 +3166,7 @@ export default function Homepage({ currentUsername, onLogout }) {
   // tree is the primary flow and filtering is an opt-in refinement.
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterTypes, setFilterTypes] = useState([]);
-  const [sortBy, setSortBy] = useState("terbaru"); // terbaru | judul
+  const [sortBy, setSortBy] = useState("urutan"); // urutan | terbaru | judul
 
   function toggleFilter(list, setList, value) {
     setList(list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
@@ -3192,13 +3193,27 @@ export default function Homepage({ currentUsername, onLogout }) {
       if (filterTypes.length && !filterTypes.includes(m.type)) return false;
       if (search.trim()) {
         const q = search.trim().toLowerCase();
-        const inTitle = m.title.toLowerCase().includes(q);
-        const inTags = m.tags.some((t) => t.label.toLowerCase().includes(q));
+        // w3study-fix: aman untuk judul/tag kosong atau tag berbentuk string
+        const labelOf = (t) => String(typeof t === "string" ? t : (t && t.label) || "");
+        const inTitle = String(m.title || "").toLowerCase().includes(q);
+        const inTags = (Array.isArray(m.tags) ? m.tags : []).some((t) => labelOf(t).toLowerCase().includes(q));
         if (!inTitle && !inTags) return false;
       }
       return true;
     });
-    if (sortBy === "judul") result = [...result].sort((a, b) => a.title.localeCompare(b.title));
+    if (sortBy === "judul") {
+      result = [...result].sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
+    } else if (sortBy === "urutan" && openTopic) {
+      // Urutan yang diatur admin di dalam topik; modul tanpa urutan tetap di bawah (terbaru dulu, sort() stabil).
+      result = [...result].sort((a, b) => {
+        const x = a.sortOrder;
+        const y = b.sortOrder;
+        if (x == null && y == null) return 0;
+        if (x == null) return 1;
+        if (y == null) return -1;
+        return x - y;
+      });
+    }
     return result;
   }, [localModules, openSubject, openTopic, filterTypes, search, sortBy, moduleKindFilter]);
 
@@ -3656,6 +3671,7 @@ function FilterPanel({ ctx }) {
         <div>
           <div style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.inkFaint, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.4 }}>Urutkan</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button style={chipStyle(sortBy === "urutan")} onClick={() => setSortBy("urutan")}>Urutan topik</button>
             <button style={chipStyle(sortBy === "terbaru")} onClick={() => setSortBy("terbaru")}>Terbaru</button>
             <button style={chipStyle(sortBy === "judul")} onClick={() => setSortBy("judul")}>Judul A-Z</button>
           </div>
@@ -4024,8 +4040,6 @@ function SearchHub({ ctx }) {
           </>
         )}
       </div>
-
-      <AiEthicsBanner ctx={ctx} embedded />
 
       {/* results */}
       {hasQuery && (heroSearching || !heroResults) && (
@@ -5753,6 +5767,25 @@ function MyActivityPanel({ ctx, username, editable }) {
   } = ctx;
   const [tab, setTab] = useState("modul");
 
+  // Sembunyikan / tampilkan panel aktivitas. Pilihan disimpan di browser,
+  // terpisah untuk profil sendiri dan profil orang lain.
+  const hiddenKey = editable ? "w3study.activity.hidden.own" : "w3study.activity.hidden.others";
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    try {
+      setHidden(window.localStorage.getItem(hiddenKey) === "1");
+    } catch {
+      setHidden(false);
+    }
+  }, [hiddenKey]);
+  function toggleActivityHidden() {
+    const next = !hidden;
+    setHidden(next);
+    try {
+      window.localStorage.setItem(hiddenKey, next ? "1" : "0");
+    } catch {}
+  }
+
   const myModules = localModules.filter((m) => m.uploader === username);
   const myPosts = localPosts.filter((p) => p.author === username);
   const myReplies = [];
@@ -5780,12 +5813,23 @@ function MyActivityPanel({ ctx, username, editable }) {
 
   return (
     <div style={{ marginTop: 24, padding: "20px 22px", borderRadius: 16, background: c.card, border: `1px solid ${c.line}` }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: hidden ? 0 : 4 }}>
         <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 14, color: c.ink }}>{editable ? "Aktivitas saya" : `Aktivitas ${username}`}</div>
-        <div style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint }}>
-          {myModules.length} modul · {myPosts.length} post · {myReplies.length} balasan
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint }}>
+            {myModules.length} modul · {myPosts.length} post · {myReplies.length} balasan
+          </span>
+          <button
+            onClick={toggleActivityHidden}
+            aria-expanded={!hidden}
+            style={{ background: "none", border: `1px solid ${c.line}`, borderRadius: 999, padding: "3px 11px", fontFamily: sans, fontSize: 11, fontWeight: 700, color: c.blue, cursor: "pointer" }}
+          >
+            {hidden ? "Tampilkan" : "Sembunyikan"}
+          </button>
         </div>
       </div>
+      {!hidden && (
+      <>
       <div style={{ fontFamily: sans, fontSize: 11.5, color: c.inkMuted, marginBottom: 14 }}>
         {editable
           ? "Semua yang pernah kamu unggah atau tulis. Dari sini kamu bisa mengedit atau menghapusnya."
@@ -5930,6 +5974,8 @@ function MyActivityPanel({ ctx, username, editable }) {
               );
             }))}
       </div>
+      </>
+      )}
     </div>
   );
 }

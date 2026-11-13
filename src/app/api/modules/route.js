@@ -48,15 +48,14 @@ export async function GET(request) {
     // is_exercise / exercise_set_by baru ada setelah SQL tahap 3; sebelum itu
     // daftar modul tetap dimuat tanpa kolom tersebut.
     const baseCols = "id, title, original_title, subject, topic, topic_is_custom, level, description, file_type, file_url, link_url, file_size_bytes, tags, created_at, uploader_id";
-    let { data: modules, error } = await supabaseAdmin
-      .from("modules")
-      .select(`${baseCols}, is_exercise, exercise_set_by`)
-      .order("created_at", { ascending: false });
-    if (error && error.code === "42703") {
-      ({ data: modules, error } = await supabaseAdmin
-        .from("modules")
-        .select(baseCols)
-        .order("created_at", { ascending: false }));
+    // Coba dari kolom terlengkap ke paling sedikit: kolom yang belum ada (SQL belum dijalankan)
+    // tidak boleh membuat daftar modul gagal. sort_order = urutan buatan admin (admin_setup_4.sql).
+    const attempts = [`${baseCols}, is_exercise, exercise_set_by, sort_order`, `${baseCols}, is_exercise, exercise_set_by`, baseCols];
+    let modules = null;
+    let error = null;
+    for (const cols of attempts) {
+      ({ data: modules, error } = await supabaseAdmin.from("modules").select(cols).order("created_at", { ascending: false }));
+      if (!error || error.code !== "42703") break;
     }
     if (error) {
       console.error("Gagal mengambil daftar modul:", error);

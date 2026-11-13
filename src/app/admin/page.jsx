@@ -905,9 +905,95 @@ function MoveModal({ topic, subjects, topics, onClose, onDone }) {
   );
 }
 
+// ------------------------------------------------- Urutan modul dalam topik
+function OrderModal({ topic, onClose, onSaved, notify }) {
+  const path = `topics/order?subject=${encodeURIComponent(topic.subject)}&topic=${encodeURIComponent(topic.topic)}`;
+  const { data, loading, error } = useLoad(path);
+  const [list, setList] = useState([]);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (data && Array.isArray(data.modules)) {
+      setList(data.modules);
+      setDirty(false);
+    }
+  }, [data]);
+
+  function moveTo(from, to) {
+    if (from === to || to < 0 || to >= list.length) return;
+    const next = [...list];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    setList(next);
+    setDirty(true);
+  }
+
+  async function save(reset) {
+    setBusy(true);
+    setErr("");
+    try {
+      const body = reset ? { subject: topic.subject, topic: topic.topic, reset: true } : { subject: topic.subject, topic: topic.topic, ids: list.map((m) => m.id) };
+      const r = await api("topics/order", { method: "POST", body });
+      notify(reset ? "Urutan manual dihapus (kembali terbaru dulu)." : `Urutan ${r.count} modul disimpan.`);
+      onSaved();
+      onClose();
+    } catch (e) {
+      setErr(e.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Urutkan modul — ${topic.topic}`} onClose={onClose} wide>
+      <p className="adm-mute">
+        Urutan ini yang dilihat siswa di dalam topik <b>{topic.subject} / {topic.topic}</b> (atas = pertama). Modul baru yang diunggah tampil di bawah sampai kamu urutkan lagi.
+      </p>
+      {loading && <p className="adm-mute">Memuat…</p>}
+      {error && <p className="adm-err">{error}</p>}
+      {data && data.needsSql && <div className="adm-err">Kolom urutan belum ada. Jalankan admin_setup_4.sql di Supabase SQL Editor dulu.</div>}
+      {!loading && !error && (
+        <div style={{ maxHeight: "55vh", overflowY: "auto" }}>
+          {list.map((m, i) => (
+            <div key={m.id} className="adm-row" style={{ alignItems: "center" }}>
+              <span className="adm-mute" style={{ width: 28, textAlign: "right" }}>{i + 1}.</span>
+              <div className="main" style={{ minWidth: 0 }}>
+                <b>{m.title}</b> {m.type && <span className="adm-badge">{m.type}</span>}
+              </div>
+              <div className="adm-bar" style={{ gap: 4, flexShrink: 0 }}>
+                <button className="adm-btn" aria-label="Ke paling atas" title="Ke paling atas" disabled={busy || i === 0} onClick={() => moveTo(i, 0)}>⤒</button>
+                <button className="adm-btn" aria-label="Naik satu" title="Naik satu" disabled={busy || i === 0} onClick={() => moveTo(i, i - 1)}>▲</button>
+                <button className="adm-btn" aria-label="Turun satu" title="Turun satu" disabled={busy || i === list.length - 1} onClick={() => moveTo(i, i + 1)}>▼</button>
+                <button className="adm-btn" aria-label="Ke paling bawah" title="Ke paling bawah" disabled={busy || i === list.length - 1} onClick={() => moveTo(i, list.length - 1)}>⤓</button>
+              </div>
+            </div>
+          ))}
+          {list.length === 0 && <p className="adm-mute">Tidak ada modul di topik ini.</p>}
+        </div>
+      )}
+      {err && <div className="adm-err">{err}</div>}
+      <div className="adm-bar" style={{ marginTop: 12, justifyContent: "space-between" }}>
+        <button className="adm-btn" onClick={() => save(true)} disabled={busy || loading || !!error || list.length === 0}>
+          Hapus urutan manual
+        </button>
+        <div className="adm-bar">
+          <button className="adm-btn" onClick={onClose} disabled={busy}>
+            Batal
+          </button>
+          <button className="adm-btn pri" onClick={() => save(false)} disabled={busy || !dirty || list.length === 0}>
+            {busy ? "Menyimpan…" : "Simpan urutan"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function TopicsTab({ notify }) {
   const { data, loading, error, reload } = useLoad("topics");
   const [moving, setMoving] = useState(null);
+  const [ordering, setOrdering] = useState(null);
   const [filter, setFilter] = useState("");
 
   async function onMoved(r) {
@@ -941,14 +1027,22 @@ function TopicsTab({ notify }) {
                 {t.modules} modul · {t.posts} post {t.custom > 0 && <Badge tone="warn">{t.custom} buatan pengguna</Badge>}
               </div>
             </div>
-            <button className="adm-btn" onClick={() => setMoving(t)}>
-              Pindahkan / ganti nama
-            </button>
+            <div className="adm-bar" style={{ gap: 6, flexShrink: 0 }}>
+              {t.modules > 1 && (
+                <button className="adm-btn" onClick={() => setOrdering(t)}>
+                  Urutkan modul
+                </button>
+              )}
+              <button className="adm-btn" onClick={() => setMoving(t)}>
+                Pindahkan / ganti nama
+              </button>
+            </div>
           </div>
         ))}
         {topics.length === 0 && <p className="adm-mute">Tidak ada topik.</p>}
       </div>
       {moving && <MoveModal topic={moving} subjects={subjects} topics={data.topics} onClose={() => setMoving(null)} onDone={onMoved} />}
+      {ordering && <OrderModal topic={ordering} onClose={() => setOrdering(null)} onSaved={reload} notify={notify} />}
     </>
   );
 }
