@@ -128,11 +128,16 @@ async function extractFileText(fileUrl, fileType) {
       const res = await fetch(fileUrl);
       if (!res.ok) return null;
       const buffer = Buffer.from(await res.arrayBuffer());
-      // Import langsung ke file lib: import "pdf-parse" biasa mencoba membaca file tes
-      // ('./test/data/05-versions-space.pdf') saat dibundel dan menyebabkan error ENOENT di Vercel.
-      const pdfParse = (await import("pdf-parse/lib/pdf-parse.js")).default;
-      const parsed = await pdfParse(buffer);
-      return (parsed.text || "").slice(0, MAX_FILE_EXCERPT_CHARS);
+      // pdf-parse v2 memakai kelas PDFParse. Worker harus diimpor SEBELUM pdf-parse (dibutuhkan di Next.js / Vercel).
+      await import("pdf-parse/worker");
+      const { PDFParse } = await import("pdf-parse");
+      const parser = new PDFParse({ data: new Uint8Array(buffer) });
+      try {
+        const parsed = await parser.getText({ pageJoiner: "\n\n" });
+        return (parsed.text || "").replace(/\n{3,}/g, "\n\n").slice(0, MAX_FILE_EXCERPT_CHARS);
+      } finally {
+        await parser.destroy().catch(() => {});
+      }
     }
     return null;
   } catch (err) {

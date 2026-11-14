@@ -990,10 +990,78 @@ function OrderModal({ topic, onClose, onSaved, notify }) {
   );
 }
 
+// ------------------------------------------------- Hapus topik
+function DeleteTopicModal({ topic, topics, onClose, onDone }) {
+  const [dest, setDest] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const hasContent = topic.modules + topic.posts > 0;
+  const options = topics.filter((t) => !t.removed && !(t.subject === topic.subject && t.topic === topic.topic));
+
+  async function go() {
+    setBusy(true);
+    setErr("");
+    try {
+      const target = dest !== "" ? options[Number(dest)] : null;
+      const body = { subject: topic.subject, topic: topic.topic, moveTo: target ? { subject: target.subject, topic: target.topic } : null, reason };
+      const r = await api("topics/remove", { method: "POST", body });
+      onDone(r);
+      onClose();
+    } catch (e) {
+      setErr(e.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Hapus topik" onClose={onClose}>
+      <p className="adm-mute">
+        Hapus <b>{topic.subject} / {topic.topic}</b>?
+      </p>
+      <p className="adm-mute">
+        {topic.template
+          ? "Ini topik bawaan. Setelah dihapus, foldernya disembunyikan dari siswa dan dari pilihan topik saat upload. Kamu bisa memulihkannya lagi dari daftar ini."
+          : "Ini topik buatan pengguna. Topiknya hilang dari daftar setelah isinya dipindahkan."}
+      </p>
+      {hasContent ? (
+        <>
+          <div className="adm-err" style={{ marginTop: 0 }}>
+            Topik ini masih berisi {topic.modules} modul dan {topic.posts} post. Tidak ada yang ikut terhapus: isinya dipindahkan ke topik tujuan.
+          </div>
+          <label className="adm-lab">Pindahkan isinya ke</label>
+          <select className="adm-sel" value={dest} onChange={(e) => setDest(e.target.value)}>
+            <option value="">— pilih topik tujuan —</option>
+            {options.map((t, i) => (
+              <option key={`${t.subject}|${t.topic}`} value={String(i)}>
+                {t.subject} / {t.topic}
+              </option>
+            ))}
+          </select>
+        </>
+      ) : (
+        <p className="adm-mute">Topik ini kosong, jadi tidak ada yang perlu dipindahkan.</p>
+      )}
+      <label className="adm-lab">Catatan (opsional)</label>
+      <input className="adm-in" value={reason} onChange={(e) => setReason(e.target.value)} />
+      {err && <div className="adm-err">{err}</div>}
+      <div className="adm-bar" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+        <button className="adm-btn" onClick={onClose} disabled={busy}>
+          Batal
+        </button>
+        <button className="adm-btn dng" onClick={go} disabled={busy || (hasContent && dest === "")}>
+          {busy ? "Memproses…" : "Hapus topik"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function TopicsTab({ notify }) {
   const { data, loading, error, reload } = useLoad("topics");
   const [moving, setMoving] = useState(null);
   const [ordering, setOrdering] = useState(null);
+  const [deleting, setDeleting] = useState(null);
   const [filter, setFilter] = useState("");
 
   async function onMoved(r) {
@@ -1011,6 +1079,28 @@ function TopicsTab({ notify }) {
 
   if (loading) return <p className="adm-mute">Memuat…</p>;
   if (error) return <p className="adm-err">{error}</p>;
+  async function onDeleted(r) {
+    notify(r.modules + r.posts > 0 ? `Topik dihapus. ${r.modules} modul dan ${r.posts} post dipindahkan.` : "Topik dihapus.");
+    reload();
+    if (r.needsEmbed) {
+      try {
+        await runLoop("embed");
+        notify("Indeks pencarian diperbarui.");
+      } catch (e) {
+        notify(`Topik dihapus, tetapi indeks pencarian belum selesai: ${e.message}. Jalankan dari tab Maintenance.`, "err");
+      }
+    }
+  }
+  async function restoreTopic(t) {
+    try {
+      await api("topics/remove", { method: "POST", body: { subject: t.subject, topic: t.topic, restore: true } });
+      notify(`Topik "${t.topic}" dipulihkan.`);
+      reload();
+    } catch (e) {
+      notify(e.message, "err");
+    }
+  }
+
   const topics = data.topics.filter((t) => `${t.subject} ${t.topic}`.toLowerCase().includes(filter.toLowerCase()));
   const subjects = Array.from(new Set(data.topics.map((t) => t.subject)));
   return (
@@ -1018,24 +1108,40 @@ function TopicsTab({ notify }) {
       <div className="adm-bar">
         <input className="adm-in" placeholder="Filter subject / topik…" value={filter} onChange={(e) => setFilter(e.target.value)} />
       </div>
+      {data.needsSql && (
+        <div className="adm-err" style={{ marginTop: 0, marginBottom: 10 }}>
+          Tabel topik terhapus belum ada, jadi hapus/pulihkan topik bawaan belum bisa dipakai. Jalankan admin_setup_5.sql di Supabase SQL Editor.
+        </div>
+      )}
       <div className="adm-card">
         {topics.map((t) => (
           <div key={`${t.subject}|${t.topic}`} className="adm-row">
             <div className="main">
               <b>{t.topic}</b> <span className="adm-mute">· {t.subject}</span>
               <div className="meta">
-                {t.modules} modul · {t.posts} post {t.custom > 0 && <Badge tone="warn">{t.custom} buatan pengguna</Badge>}
+                {t.modules} modul · {t.posts} post {t.custom > 0 && <Badge tone="warn">{t.custom} buatan pengguna</Badge>} {t.template && <Badge>bawaan</Badge>} {t.removed && <Badge tone="dng">dihapus</Badge>}
               </div>
             </div>
             <div className="adm-bar" style={{ gap: 6, flexShrink: 0 }}>
-              {t.modules > 1 && (
+              {!t.removed && t.modules > 1 && (
                 <button className="adm-btn" onClick={() => setOrdering(t)}>
                   Urutkan modul
                 </button>
               )}
-              <button className="adm-btn" onClick={() => setMoving(t)}>
-                Pindahkan / ganti nama
-              </button>
+              {t.removed ? (
+                <button className="adm-btn" onClick={() => restoreTopic(t)}>
+                  Pulihkan
+                </button>
+              ) : (
+                <>
+                  <button className="adm-btn" onClick={() => setMoving(t)}>
+                    Pindahkan / ganti nama
+                  </button>
+                  <button className="adm-btn dng" onClick={() => setDeleting(t)}>
+                    Hapus topik
+                  </button>
+                </>
+              )}
             </div>
           </div>
         ))}
@@ -1043,6 +1149,7 @@ function TopicsTab({ notify }) {
       </div>
       {moving && <MoveModal topic={moving} subjects={subjects} topics={data.topics} onClose={() => setMoving(null)} onDone={onMoved} />}
       {ordering && <OrderModal topic={ordering} onClose={() => setOrdering(null)} onSaved={reload} notify={notify} />}
+      {deleting && <DeleteTopicModal topic={deleting} topics={data.topics} onClose={() => setDeleting(null)} onDone={onDeleted} />}
     </>
   );
 }

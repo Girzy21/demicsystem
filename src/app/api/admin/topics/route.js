@@ -7,6 +7,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { requireAdmin, logAdminAction } from "@/lib/adminAuth";
+import { FOLDER_TREE } from "@/lib/folderTree";
 
 export const dynamic = "force-dynamic";
 
@@ -35,8 +36,31 @@ export async function GET(request) {
       if (!p.subject || !p.topic) continue;
       get(p.subject, p.topic).posts++;
     }
-    const topics = Array.from(map.values()).sort((x, y) => x.subject.localeCompare(y.subject) || x.topic.localeCompare(y.topic));
-    return NextResponse.json({ topics });
+    // Topik bawaan (src/lib/folderTree.js) ikut ditampilkan walau belum punya isi, supaya admin bisa mengelolanya.
+    const norm = (v) => String(v ?? "").trim().toLowerCase();
+    let needsSql = false;
+    let removed = [];
+    {
+      const r = await supabaseAdmin.from("removed_topics").select("subject, topic");
+      if (r.error) needsSql = true; // tabel belum dibuat (admin_setup_5.sql)
+      else removed = r.data || [];
+    }
+    const removedKeys = new Set(removed.map((r) => `${r.subject}\u0000${norm(r.topic)}`));
+    const all = Array.from(map.values());
+    for (const t of all) {
+      t.template = (FOLDER_TREE[t.subject] || []).some((n) => norm(n) === norm(t.topic));
+      t.removed = false;
+    }
+    for (const [subject, names] of Object.entries(FOLDER_TREE)) {
+      for (const name of names) {
+        const isRemoved = removedKeys.has(`${subject}\u0000${norm(name)}`);
+        const existing = all.find((t) => t.subject === subject && norm(t.topic) === norm(name));
+        if (existing) existing.removed = isRemoved && existing.modules === 0 && existing.posts === 0; // masih ada isi = tetap tampil untuk siswa
+        else all.push({ subject, topic: name, modules: 0, posts: 0, custom: 0, template: true, removed: isRemoved });
+      }
+    }
+    const topics = all.sort((x, y) => x.subject.localeCompare(y.subject) || x.topic.localeCompare(y.topic));
+    return NextResponse.json({ topics, needsSql });
   } catch (err) {
     console.error("Gagal memproses topik (admin):", err);
     return NextResponse.json({ error: "Gagal mengambil topik." }, { status: 500 });

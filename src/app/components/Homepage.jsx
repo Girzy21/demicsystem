@@ -5,6 +5,7 @@ import { SANS_STACK, HEADING_STACK, BRAND_NAME, W3Mark } from "@/app/brand";
 import PeopleDirectory from "./PeopleDirectory";
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { FOLDER_TREE } from "@/lib/folderTree";
 
 // =====================================================================
 // DEV NOTE — search roadmap (read this before touching search code)
@@ -187,30 +188,7 @@ const NAV_ITEMS = [
   { key: "profile", label: "Profile", icon: "◐" },
 ];
 
-// Folder tree: Subject → Topic. This is the primary organizing structure —
-// browsing feels like a file manager, not a filtered flat list.
-//
-// CAS (Creativity, Activity, Service) is an IB DP core component, not a
-// subject with a syllabus — its "topics" are the three CAS strands plus the
-// CAS Project.
-const FOLDER_TREE = {
-  Physics: ["Mechanics", "Waves & Oscillation", "Thermal Physics", "Electricity & Magnetism"],
-  Chemistry: ["Organic Chemistry", "Atomic Structure", "Equilibrium", "Acids & Bases"],
-  // Math AA and Math AI used to be separate subjects (mirroring the IB's
-  // "Analysis & Approaches" / "Applications & Interpretation" split). Merged
-  // into one Math folder per explicit requirement — the SL/HL-style route
-  // distinction isn't tracked anymore, just the topic itself. Topic list is
-  // the union of both former lists, de-duplicated.
-  Math: ["Calculus", "Algebra", "Statistics & Probability", "Geometry & Trigonometry", "Modelling"],
-  Biology: ["Cell Biology", "Genetics", "Ecology", "Human Physiology"],
-  Economics: ["Microeconomics", "Macroeconomics", "International Trade"],
-  "Business Mgmt": ["Marketing", "Finance & Accounts", "Human Resources"],
-  // Was "English Lit" — merged/renamed to plain "English" per explicit requirement.
-  English: ["Poetry Analysis", "Prose Fiction", "Paper 2 Comparative"],
-  History: ["Cold War", "Authoritarian States", "Independence Movements"],
-  TOK: ["Knowledge Questions", "Essay Prep", "Exhibition"],
-  CAS: ["Creativity", "Activity", "Service", "CAS Project"],
-};
+// FOLDER_TREE (subject -> topik bawaan) sekarang ada di src/lib/folderTree.js, dipakai juga oleh panel admin.
 
 const SUBJECT_ORDER = Object.keys(FOLDER_TREE);
 
@@ -520,9 +498,14 @@ function matchesModuleKind(m, kind) {
 // diketik pengguna saat upload. Dulu folder hanya dibaca dari FOLDER_TREE,
 // sehingga modul dengan topik kustom tidak pernah punya folder (tetapi tetap
 // muncul di pencarian).
-function moduleTopicsFor(subject, extra) {
-  const base = FOLDER_TREE[subject] || [];
-  const seen = new Set(base.map((t) => t.toLowerCase()));
+function moduleTopicsFor(subject, extra, removed) {
+  const full = FOLDER_TREE[subject] || [];
+  const norm = (t) => String(t || "").trim().toLowerCase();
+  // Topik bawaan yang sudah dihapus admin disembunyikan, kecuali masih ada modul di dalamnya.
+  const gone = new Set((removed || []).filter((r) => r && r.subject === subject).map((r) => norm(r.topic)));
+  const used = new Set((extra || []).filter((m) => m.subject === subject).map((m) => norm(m.topic)));
+  const base = full.filter((t) => !gone.has(norm(t)) || used.has(norm(t)));
+  const seen = new Set(full.map((t) => t.toLowerCase()));
   const custom = [];
   for (const m of extra || []) {
     if (m.subject !== subject || !m.topic) continue;
@@ -679,9 +662,11 @@ function ModuleUploadComposer({
   moduleDraftAllowAiFileRead, setModuleDraftAllowAiFileRead,
   showAiConsentModal, setShowAiConsentModal,
   setUploadingModule, resetModuleDraft, submitModuleUpload,
+  topicsForSubject,
 }) {
   const fileInputRef = useRef(null);
-  const topicOptions = FOLDER_TREE[moduleDraftSubject] || [];
+  // Semua topik subject ini: bawaan + topik buatan pengguna yang sudah ada (bukan hanya FOLDER_TREE).
+  const topicOptions = typeof topicsForSubject === "function" ? topicsForSubject(moduleDraftSubject) : FOLDER_TREE[moduleDraftSubject] || [];
 
   function handleSubjectChange(newSubject) {
     setModuleDraftSubject(newSubject);
@@ -2300,6 +2285,7 @@ export default function Homepage({ currentUsername, onLogout }) {
   // as forum posts/replies and profile photo — upload state needs to
   // survive the person navigating away from Bank Modul mid-upload. ----
   const [localModules, setLocalModules] = useState([]);
+  const [removedTopics, setRemovedTopics] = useState([]);
   const [pendingModuleUploads, setPendingModuleUploads] = useState([]); // [{ tempId, title, error }]
   const [modulesLoading, setModulesLoading] = useState(true);
 
@@ -2348,6 +2334,7 @@ export default function Homepage({ currentUsername, onLogout }) {
       const result = await res.json();
       if (res.ok && result.modules) {
         setLocalModules(result.modules.map(moduleFromApiRow));
+        setRemovedTopics(Array.isArray(result.removedTopics) ? result.removedTopics : []);
       }
     } catch (err) {
       console.error("Gagal memuat daftar modul:", err);
@@ -3368,7 +3355,7 @@ export default function Homepage({ currentUsername, onLogout }) {
     saveModuleType, typeChangeNotifications, setTypeChangeNotifications,
     openModuleFromMention, startDiscussionAboutModule, openDiscussionsForModule,
     draftMentionModuleId, setDraftMentionModuleId, forumModuleFilterId, setForumModuleFilterId,
-    highlightedModuleId, profileFor, profileSaveError, profilesByUsername, UsernameAvatar,
+    highlightedModuleId, profileFor, profileSaveError, profilesByUsername, UsernameAvatar, removedTopics,
     openPostId, composingPost, setComposingPost,
     draftPostType, setDraftPostType, draftBody, setDraftBody, draftImages, setDraftImages,
     localPosts, pendingPosts, submitForumPost,
@@ -4041,6 +4028,8 @@ function SearchHub({ ctx }) {
         )}
       </div>
 
+      {!hasQuery && <AiEthicsBanner ctx={ctx} embedded />}
+
       {/* results */}
       {hasQuery && (heroSearching || !heroResults) && (
         <div style={{ padding: "36px 20px", textAlign: "center", borderRadius: 14, border: `1px dashed ${c.line}`, background: c.card }}>
@@ -4152,7 +4141,7 @@ function TagChip({ ctx, tag }) {
 function FolderGrid({ ctx }) {
   const { c, sans, openSubject, setOpenTopic, goToSubject, localModules, moduleKindFilter } = ctx;
   const items = openSubject
-    ? moduleTopicsFor(openSubject, localModules).map((t) => ({ key: t.name, label: t.name, isNew: t.isNew, count: moduleCountFor(openSubject, t.name, localModules, moduleKindFilter) }))
+    ? moduleTopicsFor(openSubject, localModules, ctx.removedTopics).map((t) => ({ key: t.name, label: t.name, isNew: t.isNew, count: moduleCountFor(openSubject, t.name, localModules, moduleKindFilter) }))
     : SUBJECT_ORDER.map((subject) => ({ key: subject, label: subject, count: moduleCountFor(subject, undefined, localModules, moduleKindFilter) }));
 
   return (
@@ -4413,6 +4402,7 @@ function BankModulSection({ ctx }) {
       moduleDraftAllowAiFileRead={moduleDraftAllowAiFileRead} setModuleDraftAllowAiFileRead={setModuleDraftAllowAiFileRead}
       showAiConsentModal={showAiConsentModal} setShowAiConsentModal={setShowAiConsentModal}
       setUploadingModule={setUploadingModule} resetModuleDraft={resetModuleDraft} submitModuleUpload={submitModuleUpload}
+      topicsForSubject={(s) => moduleTopicsFor(s, localModules, ctx.removedTopics).map((t) => t.name)}
     />
   );
 
@@ -5457,58 +5447,86 @@ function IdentityCard({ ctx, draftMode, profile, profileDraft, isOwnProfile, edi
 }
 
 // ---- read view: right column content -------------------------------------------------
+// w3study-profile-v2: tampilan profil yang lebih enak dibaca (bio, goal, ketertarikan, skill)
 function ProfileView({ ctx, profile, isOwnProfile, editingProfile, setLightboxAvatar }) {
-  const { c, sans } = ctx;
+  const { c, sans, startEditingProfile } = ctx;
+  const interests = Array.isArray(profile.interests) ? profile.interests : [];
+  const skills = Array.isArray(profile.skills) ? profile.skills : [];
+  const card = { padding: "22px 24px", borderRadius: 18, background: c.card, border: `1px solid ${c.line}` };
+
+  const heading = (icon, label, accent, soft, count) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 14 }}>
+      <span style={{ width: 28, height: 28, borderRadius: 9, background: soft, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{icon}</span>
+      <span style={{ fontFamily: sans, fontWeight: 700, fontSize: 13.5, color: c.ink }}>{label}</span>
+      {count > 0 && (
+        <span style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, color: accent, background: soft, padding: "1px 8px", borderRadius: 999 }}>{count}</span>
+      )}
+    </div>
+  );
+  const chip = (text, accent, soft) => (
+    <span key={text} style={{ ...profileChipStyle(sans, accent, soft), fontSize: 12.5, padding: "6px 14px", border: `1px solid ${accent}2E` }}>{text}</span>
+  );
+  const emptyHint = (what) => (
+    <div style={{ fontFamily: sans, fontSize: 12.5, color: c.inkFaint, lineHeight: 1.6 }}>
+      {isOwnProfile ? (
+        <>
+          Belum ada {what}.{" "}
+          <button
+            onClick={startEditingProfile}
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: sans, fontSize: 12.5, fontWeight: 700, color: c.blue }}
+          >
+            Tambahkan
+          </button>
+        </>
+      ) : (
+        `Belum ada ${what}.`
+      )}
+    </div>
+  );
+  const nothingFilled = !profile.headline && !profile.goal && !interests.length && !skills.length;
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 24, alignItems: "start" }}>
       <IdentityCard ctx={ctx} draftMode={false} profile={profile} isOwnProfile={isOwnProfile} editingProfile={editingProfile} setLightboxAvatar={setLightboxAvatar} />
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
         {profile.headline && (
-          <div style={{ padding: "22px 26px", borderRadius: 16, background: c.card, border: `1px solid ${c.line}` }}>
-            <p style={{ fontFamily: sans, fontSize: 15, color: c.ink, lineHeight: 1.65, margin: 0 }}>{profile.headline}</p>
+          <div style={{ ...card, padding: "24px 28px", borderLeft: `4px solid ${c.blue}` }}>
+            {heading("✍️", "Tentang", c.blue, c.blueSoft)}
+            <p style={{ fontFamily: sans, fontSize: 14.5, color: c.ink, lineHeight: 1.75, margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{profile.headline}</p>
           </div>
         )}
 
         {profile.goal && (
-          <div style={{ padding: "18px 22px", borderRadius: 16, background: c.blueSoft }}>
-            <div style={{ fontFamily: sans, fontSize: 10.5, fontWeight: 700, color: c.blue, marginBottom: 6, letterSpacing: 0.2 }}>Goal</div>
-            <p style={{ fontFamily: sans, fontSize: 13, color: c.ink, lineHeight: 1.55, margin: 0 }}>{profile.goal}</p>
+          <div style={{ ...card, background: `linear-gradient(135deg, ${c.blueSoft}, ${c.card})`, border: `1px solid ${c.blue}22` }}>
+            {heading("🎯", "Goal", c.blue, "#FFFFFF99")}
+            <p style={{ fontFamily: sans, fontSize: 13.5, color: c.ink, lineHeight: 1.7, margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{profile.goal}</p>
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-          <div style={{ padding: "20px 22px", borderRadius: 16, background: c.card, border: `1px solid ${c.line}` }}>
-            <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 12 }}>Ketertarikan</div>
-            {profile.interests.length ? (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
-                {profile.interests.map((i) => (
-                  <span key={i} style={profileChipStyle(sans, c.aiTag, c.aiTagSoft)}>{i}</span>
-                ))}
-              </div>
-            ) : (
-              <div style={{ fontFamily: sans, fontSize: 12, color: c.inkFaint, fontStyle: "italic" }}>Belum diisi.</div>
-            )}
-          </div>
-
-          <div style={{ padding: "20px 22px", borderRadius: 16, background: c.card, border: `1px solid ${c.line}` }}>
-            <div style={{ fontFamily: sans, fontWeight: 700, fontSize: 12.5, color: c.ink, marginBottom: 12 }}>Skill</div>
-            {profile.skills.length ? (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
-                {profile.skills.map((s) => (
-                  <span key={s} style={profileChipStyle(sans, c.supportAccent, c.supportSoft)}>{s}</span>
-                ))}
-              </div>
-            ) : (
-              <div style={{ fontFamily: sans, fontSize: 12, color: c.inkFaint, fontStyle: "italic" }}>Belum diisi.</div>
-            )}
-          </div>
-        </div>
-
-        {!profile.headline && !profile.goal && !profile.interests.length && !profile.skills.length && (
+        {nothingFilled ? (
           <div style={{ padding: "32px 26px", borderRadius: 16, background: c.card, border: `1px dashed ${c.line}`, textAlign: "center" }}>
             <div style={{ fontFamily: sans, fontSize: 12.5, color: c.inkFaint, fontStyle: "italic" }}>
               {isOwnProfile ? "Profil masih kosong — klik \"Edit profil\" untuk mulai mengisi." : "Pengguna ini belum mengisi bio."}
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
+            <div style={card}>
+              {heading("💡", "Ketertarikan", c.aiTag, c.aiTagSoft, interests.length)}
+              {interests.length ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{interests.map((i) => chip(i, c.aiTag, c.aiTagSoft))}</div>
+              ) : (
+                emptyHint("ketertarikan")
+              )}
+            </div>
+            <div style={card}>
+              {heading("🛠️", "Skill", c.supportAccent, c.supportSoft, skills.length)}
+              {skills.length ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{skills.map((s) => chip(s, c.supportAccent, c.supportSoft))}</div>
+              ) : (
+                emptyHint("skill")
+              )}
             </div>
           </div>
         )}
@@ -5770,12 +5788,12 @@ function MyActivityPanel({ ctx, username, editable }) {
   // Sembunyikan / tampilkan panel aktivitas. Pilihan disimpan di browser,
   // terpisah untuk profil sendiri dan profil orang lain.
   const hiddenKey = editable ? "w3study.activity.hidden.own" : "w3study.activity.hidden.others";
-  const [hidden, setHidden] = useState(false);
+  const [hidden, setHidden] = useState(true); // w3study: aktivitas tersembunyi secara default
   useEffect(() => {
     try {
-      setHidden(window.localStorage.getItem(hiddenKey) === "1");
+      setHidden(window.localStorage.getItem(hiddenKey) !== "0"); // terbuka hanya kalau pernah dipilih "Tampilkan"
     } catch {
-      setHidden(false);
+      setHidden(true);
     }
   }, [hiddenKey]);
   function toggleActivityHidden() {

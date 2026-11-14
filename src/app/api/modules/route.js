@@ -81,7 +81,15 @@ export async function GET(request) {
       uploader: usernameById[m.uploader_id] || "pengguna",
     }));
 
-    return NextResponse.json({ modules: withUploaderNames });
+    // Topik bawaan yang sudah dihapus admin (tabel removed_topics, admin_setup_5.sql).
+    // Tabel belum ada -> daftar kosong, daftar modul tetap jalan.
+    let removedTopics = [];
+    try {
+      const { data: removed, error: removedErr } = await supabaseAdmin.from("removed_topics").select("subject, topic");
+      if (!removedErr) removedTopics = removed || [];
+    } catch {}
+
+    return NextResponse.json({ modules: withUploaderNames, removedTopics });
   } catch (err) {
     console.error("Gagal memproses permintaan daftar modul:", err);
     return NextResponse.json({ error: "Gagal mengambil daftar modul." }, { status: 500 });
