@@ -22,4 +22,6 @@ export const FOLDER_TREE = {
   History: ["Cold War", "Authoritarian States", "Independence Movements"],
   TOK: ["Knowledge Questions", "Essay Prep", "Exhibition"],
   CAS: ["Creativity", "Activity", "Service", "CAS Project"],
+  // Sumber daya sekolah GDA (kalender, pre-lab, panduan, formulir). Topik bisa ditambah/diubah admin di tab Topik.
+  GDA: ["Calendar", "Pre-Lab Papers", "Handbooks & Policies", "Forms & Templates"],
 };

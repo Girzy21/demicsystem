@@ -556,8 +556,12 @@ const POST_TYPES = {
   diskusi: { label: "Diskusi Chat", icon: "💬", color: "#8A5CD9" },
   ide: { label: "Ide / Riset", icon: "💡", color: "#C9821E" },
   sharing: { label: "Sharing", icon: "📎", color: "#2E9E6B" },
-  pertanyaan: { label: "Pertanyaan", icon: "❔", color: "#2C7BE5" },
+  informasi: { label: "Informasi", icon: "📢", color: "#F26B1D" },
 };
+
+// Jenis lama yang tidak bisa dipilih lagi. Post lama dengan jenis ini tetap tampil dengan benar.
+const LEGACY_POST_TYPES = { pertanyaan: { label: "Pertanyaan", icon: "❔", color: "#2C7BE5" } };
+const postTypeMeta = (type) => POST_TYPES[type] || LEGACY_POST_TYPES[type] || POST_TYPES.diskusi;
 
 
 // Counts every reply in a thread, including nested replies-to-replies —
@@ -1061,7 +1065,7 @@ function AiFileConsentModal({ c, sans, show, onClose, onAgree }) {
 
 function PostTypeBadge({ ctx, type }) {
   const { sans } = ctx;
-  const meta = POST_TYPES[type] || POST_TYPES.diskusi;
+  const meta = postTypeMeta(type);
   return (
     <span
       style={{
@@ -1299,6 +1303,11 @@ function ActionBar({ ctx, id, targetType, replyCountValue, onReplyClick, compact
 // "tweet" shape. No separate title; the body itself is the headline. ----
 function PostCard({ ctx, p, onOpen }) {
   const { c, sans, CURRENT_USER, openProfile, avatarFor, deletePost, localReplies, countAllReplies, setEditingPostId } = ctx;
+  // Belum dibaca: disorot. Jenis "Informasi" yang belum dibaca disorot paling kontras (oranye); setelah dibaca tampil normal.
+  const unread = p.read === false && !(ctx.readIds || {})[p.id];
+  const isInfo = p.postType === "informasi";
+  const infoColor = POST_TYPES.informasi.color;
+  const forumAccent = ctx.forumAccent;
   return (
     <div
       onClick={onOpen}
@@ -1315,8 +1324,9 @@ function PostCard({ ctx, p, onOpen }) {
         gap: 11,
         padding: "14px 16px",
         borderRadius: 15,
-        background: c.card,
-        border: `1px solid ${c.line}`,
+        background: unread ? (isInfo ? "#FFEFE2" : `${forumAccent}0D`) : c.card,
+        border: unread && isInfo ? `1px solid ${infoColor}` : `1px solid ${c.line}`,
+        boxShadow: unread ? (isInfo ? `inset 5px 0 0 ${infoColor}, 0 6px 16px ${infoColor}30` : `inset 3px 0 0 ${forumAccent}`) : "none",
         cursor: "pointer",
         textAlign: "left",
         width: "100%",
@@ -1336,6 +1346,18 @@ function PostCard({ ctx, p, onOpen }) {
           </span>
           <span style={{ fontFamily: sans, fontSize: 11, color: c.inkFaint }}>· {p.time}{p.edited ? " · diedit" : ""}</span>
           <PostTypeBadge ctx={ctx} type={p.postType} />
+          {unread && (
+            <span
+              style={{
+                fontFamily: sans, fontSize: 10, fontWeight: 800, letterSpacing: 0.6, flexShrink: 0, borderRadius: 999,
+                ...(isInfo
+                  ? { color: "#FFFFFF", background: infoColor, padding: "2.5px 10px" }
+                  : { color: forumAccent, background: `${forumAccent}1A`, padding: "2.5px 8px" }),
+              }}
+            >
+              {isInfo ? "📢 BARU" : "● BARU"}
+            </span>
+          )}
           {p.subject && (
             <span style={{ fontFamily: sans, fontSize: 10.5, fontWeight: 700, color: c.blue, background: c.blueSoft, padding: "2.5px 9px", borderRadius: 999 }}>{p.subject}</span>
           )}
@@ -1364,7 +1386,7 @@ function PostCard({ ctx, p, onOpen }) {
           )}
         </div>
 
-        <div style={{ fontFamily: sans, fontSize: 13, color: c.ink, lineHeight: 1.5, marginBottom: p.images.length || p.attachment ? 10 : 2 }}>
+        <div style={{ fontFamily: sans, fontSize: 13, color: c.ink, lineHeight: 1.5, fontWeight: unread ? 600 : 400, marginBottom: p.images.length || p.attachment ? 10 : 2 }}>
           {p.body}
         </div>
 
@@ -1404,6 +1426,7 @@ function PendingPostCard({ ctx, pending }) {
 function PostList({ ctx }) {
   const { c, sans, forumActionError, setForumActionError, setComposingPost, pendingPosts, localPosts, forumAccent, openThread, forumTypeFilters, setForumTypeFilters, forumModuleFilterId, setForumModuleFilterId, localModules } = ctx;
   const allPosts = localPosts;
+  const unreadCount = localPosts.filter((p) => p.read === false && !(ctx.readIds || {})[p.id]).length;
   const typeCounts = {};
   for (const p of allPosts) typeCounts[p.postType] = (typeCounts[p.postType] || 0) + 1;
   const visibleByType = forumTypeFilters.length ? allPosts.filter((p) => forumTypeFilters.includes(p.postType)) : allPosts;
@@ -1425,7 +1448,20 @@ function PostList({ ctx }) {
         </div>
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-        <span style={{ fontFamily: sans, fontSize: 11.5, color: c.inkFaint, fontStyle: "italic" }}>{localPosts.length} post</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontFamily: sans, fontSize: 11.5, color: c.inkFaint, fontStyle: "italic" }}>{localPosts.length} post</span>
+          {unreadCount > 0 && (
+            <>
+              <span style={{ fontFamily: sans, fontSize: 11.5, fontWeight: 700, color: forumAccent }}>● {unreadCount} belum dibaca</span>
+              <button
+                onClick={ctx.markAllPostsRead}
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: sans, fontSize: 11.5, fontWeight: 700, color: c.blue }}
+              >
+                Tandai semua dibaca
+              </button>
+            </>
+          )}
+        </span>
         <button
           onClick={() => setComposingPost(true)}
           style={{
@@ -1636,7 +1672,7 @@ function NewPostComposer({ ctx }) {
               onKeyDown={sendOnEnter}
               value={draftBody}
               onChange={(e) => setDraftBody(e.target.value)}
-              placeholder={draftPostType === "diskusi" ? "Topik ruang chat — apa yang mau didiskusikan bareng?" : "Apa yang lagi kamu pikirkan?"}
+              placeholder={draftPostType === "diskusi" ? "Topik ruang chat — apa yang mau didiskusikan bareng?" : draftPostType === "informasi" ? "Tulis informasi untuk semua: jadwal, pengumuman, pengingat…" : "Apa yang lagi kamu pikirkan?"}
               rows={4}
               style={{
                 width: "100%",
@@ -2055,6 +2091,14 @@ export default function Homepage({ currentUsername, onLogout }) {
   // and then switching to another menu before the upload finished would
   // lose the result the same way the profile photo bug did.
   const [localPosts, setLocalPosts] = useState([]);
+
+  // Status baca forum. Server menandai post yang belum dibuka dengan p.read === false;
+  // readIds mencatat post yang baru dibuka di sesi ini (tanpa menunggu feed dimuat ulang).
+  const [readIds, setReadIds] = useState({});
+  useEffect(() => {
+    if (openPostId !== null && openPostId !== undefined) markPostRead(openPostId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPostId, localPosts]);
 
   // Posts currently being submitted — lets the composer show "Mengirim..."
   // and, more importantly, lets the person navigate away from Forum while
@@ -2786,6 +2830,7 @@ export default function Homepage({ currentUsername, onLogout }) {
           moduleId: p.moduleId || null,
           module: p.module || null,
           chat: p.chat || null,
+          read: p.read !== false,
           bookmarkedByMe: false,
           replies: [],
         };
@@ -2978,6 +3023,42 @@ export default function Homepage({ currentUsername, onLogout }) {
     setOpenPostId(null);
     setReplyTarget(null);
     setReplyDraft("");
+  }
+
+  // Tandai post sudah dibaca saat thread/ruang chat-nya dibuka (dari mana pun dibukanya).
+  async function markPostRead(id) {
+    const p = localPosts.find((x) => x.id === id);
+    if (!p || p.read !== false || readIds[id]) return;
+    setReadIds((prev) => ({ ...prev, [id]: true }));
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return;
+      await fetch("/api/forum/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ postIds: [String(id)] }),
+      });
+    } catch {
+      // Gagal menyimpan hanya berarti post tampil "baru" lagi setelah dimuat ulang.
+    }
+  }
+  async function markAllPostsRead() {
+    const all = {};
+    for (const p of localPosts) if (p.read === false) all[p.id] = true;
+    setReadIds((prev) => ({ ...prev, ...all }));
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return;
+      await fetch("/api/forum/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ all: true }),
+      });
+    } catch {}
   }
 
   // Folder navigation state: null/null = root (all subjects). Pick a subject to
@@ -3355,7 +3436,7 @@ export default function Homepage({ currentUsername, onLogout }) {
     saveModuleType, typeChangeNotifications, setTypeChangeNotifications,
     openModuleFromMention, startDiscussionAboutModule, openDiscussionsForModule,
     draftMentionModuleId, setDraftMentionModuleId, forumModuleFilterId, setForumModuleFilterId,
-    highlightedModuleId, profileFor, profileSaveError, profilesByUsername, UsernameAvatar, removedTopics,
+    highlightedModuleId, profileFor, profileSaveError, profilesByUsername, UsernameAvatar, removedTopics, readIds, markAllPostsRead,
     openPostId, composingPost, setComposingPost,
     draftPostType, setDraftPostType, draftBody, setDraftBody, draftImages, setDraftImages,
     localPosts, pendingPosts, submitForumPost,
@@ -3774,14 +3855,14 @@ function ForumSearchResultCard({ ctx, p, tierMeta }) {
       }}
     >
       <div style={{ width: 34, height: 34, borderRadius: 9, background: tierMeta.soft, color: tierMeta.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>
-        {(POST_TYPES[p.postType] || POST_TYPES.diskusi).icon}
+        {postTypeMeta(p.postType).icon}
       </div>
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontFamily: sans, fontWeight: 600, fontSize: 12.5, color: c.ink, marginBottom: 2, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
           {p.body}
         </div>
         <div style={{ fontFamily: sans, fontSize: 10.5, color: c.inkFaint }}>
-          {(POST_TYPES[p.postType] || POST_TYPES.diskusi).label}{p.subject ? ` · ${p.subject}` : ""} · {p.replyCount ?? countAllReplies(p.replies || [])} replies
+          {postTypeMeta(p.postType).label}{p.subject ? ` · ${p.subject}` : ""} · {p.replyCount ?? countAllReplies(p.replies || [])} replies
         </div>
         {p.reason && (
           <div style={{ display: "flex", alignItems: "flex-start", gap: 4, marginTop: 5, fontFamily: sans, fontSize: 10.5, color: tierMeta.accent, fontWeight: 600, lineHeight: 1.4 }}>
@@ -4593,6 +4674,7 @@ function ForumSection({ ctx }) {
     editingPostId, setEditingPostId, editingReplyId, setEditingReplyId, savingEdit,
     saveForumPostEdit, saveForumReplyEdit, forumTypeFilters, setForumTypeFilters,
     localModules, draftMentionModuleId, setDraftMentionModuleId, openModuleFromMention, forumModuleFilterId, setForumModuleFilterId,
+    readIds: ctx.readIds, markAllPostsRead: ctx.markAllPostsRead,
   };
 
   if (composingPost) return <NewPostComposer ctx={forumCtx} />;

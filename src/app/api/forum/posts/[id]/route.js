@@ -16,7 +16,7 @@ import { embedForumPost } from "@/lib/embeddings";
 
 const MAX_BODY_CHARS = 5000;
 // Harus sama dengan kunci POST_TYPES di Homepage.jsx
-const ALLOWED_POST_TYPES = ["diskusi", "ide", "sharing", "pertanyaan"];
+const ALLOWED_POST_TYPES = ["diskusi", "ide", "sharing", "pertanyaan", "informasi"];
 
 async function getUser(request) {
   const authHeader = request.headers.get("authorization") || "";

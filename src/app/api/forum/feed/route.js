@@ -44,6 +44,35 @@ export async function GET(request) {
     }
     posts = posts || [];
 
+    // Status baca (tabel forum_read_state + post_reads, admin_setup_6.sql).
+    // Tabel belum ada -> readSet = null -> semua post dianggap sudah dibaca (tidak ada yang ditandai "baru").
+    let readSet = null;
+    let baseline = null;
+    try {
+      const st = await supabaseAdmin.from("forum_read_state").select("baseline").eq("user_id", userId).maybeSingle();
+      if (!st.error) {
+        if (st.data) baseline = st.data.baseline;
+        else {
+          // Pengguna baru: post yang sudah ada saat pertama membuka forum dianggap sudah dibaca.
+          const ins = await supabaseAdmin.from("forum_read_state").insert({ user_id: userId }).select("baseline").single();
+          if (!ins.error) baseline = ins.data.baseline;
+        }
+        if (baseline) {
+          const rr = await supabaseAdmin.from("post_reads").select("post_id").eq("user_id", userId).limit(20000);
+          if (!rr.error) readSet = new Set((rr.data || []).map((r) => String(r.post_id)));
+        }
+      }
+    } catch (err) {
+      console.error("Gagal membaca status baca (feed tetap dikirim):", err);
+    }
+    const baselineMs = baseline ? new Date(baseline).getTime() : 0;
+    const isRead = (p) => {
+      if (!readSet) return true; // pelacakan belum aktif
+      if (p.author_id === userId) return true; // post sendiri
+      if (new Date(p.created_at).getTime() <= baselineMs) return true; // dibuat sebelum fitur ini / sebelum "tandai semua dibaca"
+      return readSet.has(String(p.id));
+    };
+
     // Ringkasan modul yang disebut.
     const moduleIds = Array.from(new Set(posts.map((p) => p.module_id).filter(Boolean)));
     const moduleById = {};
@@ -99,6 +128,7 @@ export async function GET(request) {
     }
 
     return NextResponse.json({
+      readTracking: !!readSet,
       posts: posts.map((p) => ({
         id: p.id,
         postType: p.post_type,
@@ -115,6 +145,7 @@ export async function GET(request) {
         likes: likeCount[p.id] || 0,
         likedByMe: !!likedByMe[p.id],
         chat: p.post_type === "diskusi" ? chat[String(p.id)] || { count: 0, last: null } : null,
+        read: isRead(p),
       })),
       replies: replies.map((r) => ({
         id: r.id,
